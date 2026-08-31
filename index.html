@@ -113,6 +113,7 @@
     height: var(--bar); font-size: 11px; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 2px; padding: 0;
   }
+  .tabbar.simple { grid-template-columns: repeat(3, 1fr); }
   .tabbar button .ic { font-size: 19px; line-height: 1; }
   .tabbar button.active { color: var(--accent); }
 
@@ -165,6 +166,7 @@
   .badge.due-over { color: #fff; background: var(--danger); border-color: var(--danger); }
   .badge.due-today { color: #1b1200; background: var(--warn); border-color: var(--warn); }
   .badge.due-soon { color: var(--warn); border-color: var(--warn); }
+  .badge.shared { color: #e3c6f5; border-color: var(--order); }
   .badge.cell { color: var(--muted); }
 
   .empty {
@@ -297,6 +299,9 @@
 const LS_DATA = "personal_taskboard_v1";
 const LS_PREFS = "private_task_prefs";
 const LS_BACKUP = "private_task_last_backup";
+const LS_SHARE = "private_task_share";      /* 共有の接続先（この端末だけに保存） */
+const LS_GRAVES = "private_task_graves";    /* 消した予定の記録（復活を防ぐ） */
+const SYNC_INTERVAL = 60000;
 const UNDO_LIMIT = 20;
 
 const CELLS = {
@@ -346,7 +351,12 @@ const LEGACY_PLAN_STATUS = {
 let tasks = new Map();
 let plans = new Map();
 let ideas = [];                 /* 予定に入れる前の思いつき（ただの箇条書き） */
-let prefs = { showDone: false, listFilter: "open" };
+let graves = { plans: [], tasks: [] };   /* 消したものの { id, deletedAt } */
+let share = { url: "", token: "", lastSync: "", lastError: "" };
+let syncing = false;
+let syncTimer = null;
+let syncPending = null;
+let prefs = { showDone: false, listFilter: "open", simple: false, shareNew: false };
 let view = "today";
 let undoStack = [];
 let calCursor = null;
@@ -452,7 +462,9 @@ function normalizeTask(raw) {
     note: String(t.note != null ? t.note : (t.reason || "")),
     importance: imp, urgency: urg, status: status,
     due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || "") ? t.due : "",
-    tags: Array.isArray(t.tags) ? t.tags.map(x => String(x)).filter(Boolean) : [],
+    tags: Array.isArray(t.tags)
+      ? t.tags.map(x => String(x)).filter(Boolean)
+      : String(t.tags == null ? "" : t.tags).split(/[\s,、]+/).filter(Boolean),
     bucket: bucket,
     order: (typeof t.order === "number" && isFinite(t.order)) ? t.order : 0,
     result: String(t.result || ""),
@@ -461,6 +473,7 @@ function normalizeTask(raw) {
     updatedAt: t.updatedAt || createdAt,
     date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || "") ? t.date : (isNaN(cd) ? todayStr() : dateStr(cd)),
     carriedFrom: (t.carried_from != null) ? t.carried_from : (t.carriedFrom != null ? t.carriedFrom : null),
+    shared: (t.shared === true || t.shared === "true"),
   };
 }
 function taskObj(t) {
@@ -471,6 +484,15 @@ function taskObj(t) {
     completed_at: legacyFromIso(t.completedAt),
     note: t.note, importance: t.importance, urgency: t.urgency, status: t.status,
     bucket: t.bucket, tags: t.tags, completedAt: t.completedAt,
+    createdAt: t.createdAt, updatedAt: t.updatedAt, shared: t.shared,
+  };
+}
+/* 共有に送る形。タグは文字列にして、表計算でも読めるようにする */
+function taskToWire(t) {
+  return {
+    id: t.id, title: t.title, note: t.note, importance: t.importance, urgency: t.urgency,
+    status: t.status, due: t.due, tags: (t.tags || []).join(" "), bucket: t.bucket,
+    order: t.order, result: t.result, completedAt: t.completedAt, date: t.date,
     createdAt: t.createdAt, updatedAt: t.updatedAt,
   };
 }
@@ -609,18 +631,33 @@ function save() {
   try { localStorage.setItem(LS_DATA, JSON.stringify(buildFileObj())); }
   catch (e) { showToast("保存できませんでした（空き容量をご確認ください）"); }
 }
+/* 妻の端末など、共有の予定だけ見たいとき用 */
+function applySimpleMode() {
+  const bar = $("tabbar");
+  bar.classList.toggle("simple", !!prefs.simple);
+  [...bar.children].forEach(b => {
+    const keep = !prefs.simple
+      || b.dataset.v === "today" || b.dataset.v === "cal" || b.dataset.v === "plan";
+    b.classList.toggle("hidden", !keep);
+  });
+  if (prefs.simple && !["today", "cal", "plan"].includes(view)) view = "today";
+}
+
 function setStateFromObj(state) {
   tasks = new Map();
   (state.tasks || []).map(normalizeTask).forEach(t => {
     while (tasks.has(t.id)) t.id = newId();
     tasks.set(t.id, t);
   });
+  setPlansFromArray(state.plans || []);
+  ideas = (state.ideas || []).map(normalizeIdea).filter(i => i.text);
+}
+function setPlansFromArray(arr) {
   plans = new Map();
-  (state.plans || []).map(normalizePlan).forEach(p => {
+  (arr || []).map(normalizePlan).forEach(p => {
     while (plans.has(p.id)) p.id = newId();
     plans.set(p.id, p);
   });
-  ideas = (state.ideas || []).map(normalizeIdea).filter(i => i.text);
 }
 function parseStateText(txt) {
   try {
@@ -651,6 +688,168 @@ function undo() {
 }
 
 /* ============================================================
+   4.5 共有（発注・出張だけをスプレッドシートと行き来させる）
+   ------------------------------------------------------------
+   送るのは plans だけ。タスクとアイデアはこの端末から出ません。
+   ============================================================ */
+
+function loadShare() {
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_SHARE) || "{}");
+    if (o && typeof o === "object") share = Object.assign(share, o);
+  } catch (e) { /* 既定のまま */ }
+  try {
+    const g = JSON.parse(localStorage.getItem(LS_GRAVES) || "{}");
+    if (Array.isArray(g)) graves = { plans: g, tasks: [] };        /* 前の版の形 */
+    else if (g && typeof g === "object") graves = { plans: g.plans || [], tasks: g.tasks || [] };
+  } catch (e) { graves = { plans: [], tasks: [] }; }
+}
+function saveShare() {
+  try { localStorage.setItem(LS_SHARE, JSON.stringify(share)); } catch (e) { /* 続行 */ }
+}
+function saveGraves() {
+  try { localStorage.setItem(LS_GRAVES, JSON.stringify(graves)); } catch (e) { /* 続行 */ }
+}
+function shareOn() { return !!(share.url && share.token); }
+
+/* 予定を消したことを覚えておく（相手の端末から復活させないため） */
+function markGrave(kind, id) {
+  graves[kind] = (graves[kind] || []).filter(g => g.id !== id);
+  graves[kind].push({ id: id, deletedAt: nowIso() });
+  saveGraves();
+}
+
+function syncStatusText() {
+  if (!shareOn()) return "未設定";
+  if (syncing) return "同期中…";
+  if (share.lastError) return "失敗: " + share.lastError;
+  return share.lastSync ? `最終同期 ${fmtDateTime(share.lastSync)}` : "まだ同期していません";
+}
+
+async function syncShared(manual) {
+  if (!shareOn()) { if (manual) showToast("先に「共有の設定」をしてください"); return; }
+  if (syncing) return;
+  syncing = true;
+  if (manual) showToast("同期しています…");
+  try {
+    const payload = {
+      token: share.token,
+      plans: [...plans.values()].map(planObj),
+      tasks: [...tasks.values()].filter(t => t.shared).map(taskToWire),
+      graves: graves,
+    };
+    /* Content-Type を付けないことで、GAS でも余計な事前確認なしに届く */
+    const res = await fetch(share.url, { method: "POST", body: JSON.stringify(payload), redirect: "follow" });
+    const data = await res.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || "サーバーが受け付けませんでした");
+    setPlansFromArray(data.plans || []);
+    mergeSharedTasks(data.tasks || []);
+    const limit = Date.now() - 60 * 86400000;
+    ["plans", "tasks"].forEach(k => {
+      graves[k] = (graves[k] || []).filter(g => new Date(g.deletedAt).getTime() > limit);
+    });
+    saveGraves();
+    share.lastSync = nowIso();
+    share.lastError = "";
+    saveShare();
+    save();
+    render();
+    if (manual) {
+      const shared = [...tasks.values()].filter(t => t.shared).length;
+      showToast(`同期しました（予定 ${plans.size} 件 / 共有タスク ${shared} 件）`);
+    }
+  } catch (err) {
+    share.lastError = String(err.message || err).slice(0, 40);
+    saveShare();
+    if (manual) showToast("同期できませんでした: " + share.lastError);
+    render();
+  } finally {
+    syncing = false;
+  }
+}
+
+/* 相手から届いた共有タスクを取り込む。共有していないタスクには触れない */
+function mergeSharedTasks(remote) {
+  const seen = new Set();
+  remote.forEach(o => {
+    const t = normalizeTask(Object.assign({}, o, { shared: true }));
+    seen.add(t.id);
+    const cur = tasks.get(t.id);
+    if (!cur || String(t.updatedAt) >= String(cur.updatedAt)) tasks.set(t.id, t);
+  });
+  /* 相手が消した共有タスクは、こちらからも消す（共有していないものは残す） */
+  [...tasks.values()].forEach(t => { if (t.shared && !seen.has(t.id)) tasks.delete(t.id); });
+}
+
+/* 予定やタスクをいじったら、少し待ってからまとめて送る */
+function scheduleSync() {
+  if (!shareOn()) return;
+  clearTimeout(syncPending);
+  syncPending = setTimeout(() => syncShared(false), 1500);
+}
+
+function startSyncTimer() {
+  clearInterval(syncTimer);
+  if (!shareOn()) return;
+  syncTimer = setInterval(() => { if (!document.hidden) syncShared(false); }, SYNC_INTERVAL);
+}
+
+function openShareSheet() {
+  openSheet(sheet => {
+    sheet.appendChild(el("h2", null, "共有の設定"));
+    sheet.appendChild(el("div", "muted",
+      "発注・出張の予定だけを、2人のiPhoneで共有します。タスクとアイデアは共有されません。"));
+
+    sheet.appendChild(el("label", null, "接続先URL（…/exec で終わるもの）"));
+    const url = el("input");
+    url.type = "url"; url.value = share.url; url.placeholder = "https://script.google.com/macros/s/…/exec";
+    url.autocomplete = "off"; url.spellcheck = false;
+    sheet.appendChild(url);
+
+    sheet.appendChild(el("label", null, "合言葉"));
+    const token = el("input");
+    token.type = "text"; token.value = share.token; token.autocomplete = "off"; token.spellcheck = false;
+    sheet.appendChild(token);
+
+    const st = el("div", "card");
+    st.style.marginTop = "14px";
+    st.appendChild(el("h3", null, "状態"));
+    st.appendChild(el("div", "muted", syncStatusText()));
+    sheet.appendChild(st);
+
+    const acts = el("div", "acts");
+    const ok = el("button", "primary", "保存して同期");
+    ok.addEventListener("click", async () => {
+      share.url = url.value.trim();
+      share.token = token.value.trim();
+      share.lastError = "";
+      saveShare();
+      closeSheet();
+      startSyncTimer();
+      await syncShared(true);
+    });
+    const cancel = el("button", null, "閉じる");
+    cancel.addEventListener("click", closeSheet);
+    acts.appendChild(ok); acts.appendChild(cancel);
+    sheet.appendChild(acts);
+
+    if (shareOn()) {
+      const off = el("button", "danger w100", "共有をやめる（この端末だけ）");
+      off.style.marginTop = "10px";
+      off.addEventListener("click", () => {
+        share = { url: "", token: "", lastSync: "", lastError: "" };
+        saveShare();
+        clearInterval(syncTimer);
+        closeSheet();
+        render();
+        showToast("共有を解除しました。予定はこの端末に残ります");
+      });
+      sheet.appendChild(off);
+    }
+  });
+}
+
+/* ============================================================
    5. 行（タスク・予定）の描画
    ============================================================ */
 
@@ -675,6 +874,7 @@ function taskRow(t, opts) {
   if (t.status !== "todo") meta.appendChild(el("span", "badge st-" + t.status, STATUSES[t.status].name));
   const db = dueBadge(t);
   if (db) meta.appendChild(el("span", "badge " + db.cls, db.text));
+  if (t.shared) meta.appendChild(el("span", "badge shared", "🤝 共有"));
   (t.tags || []).forEach(tag => meta.appendChild(el("span", "badge", "#" + tag)));
   if (meta.children.length) body.appendChild(meta);
   body.addEventListener("click", () => openTaskSheet(t.id));
@@ -786,7 +986,9 @@ function renderToday(m) {
 
 function renderList(m) {
   const chips = el("div", "chips");
-  [["open", "未完だけ"], ["all", "完了も表示"], ["due", "期限あり"]].forEach(([k, label]) => {
+  const chipDefs = [["open", "未完だけ"], ["all", "完了も表示"], ["due", "期限あり"]];
+  if (shareOn()) chipDefs.push(["shared", "共有だけ"]);
+  chipDefs.forEach(([k, label]) => {
     const b = el("button", prefs.listFilter === k ? "active" : "", label);
     b.addEventListener("click", () => {
       prefs.listFilter = k;
@@ -794,12 +996,14 @@ function renderList(m) {
       savePrefs();
       render();
     });
+    /* 「共有だけ」は完了の表示状態を変えない */
     chips.appendChild(b);
   });
   m.appendChild(chips);
 
   let list = visibleTasks();
   if (prefs.listFilter === "due") list = list.filter(t => t.due);
+  if (prefs.listFilter === "shared") list = list.filter(t => t.shared);
   if (!list.length) {
     const e = el("div", "empty");
     e.appendChild(el("div", "lead", "表示するタスクがありません"));
@@ -907,6 +1111,14 @@ function renderCal(m) {
 }
 
 function renderPlanView(m) {
+  const chips = el("div", "chips");
+  [[false, "未完だけ"], [true, "完了も表示"]].forEach(([v, label]) => {
+    const b = el("button", (!!prefs.showDone === v) ? "active" : "", label);
+    b.addEventListener("click", () => { prefs.showDone = v; savePrefs(); render(); });
+    chips.appendChild(b);
+  });
+  m.appendChild(chips);
+
   PLAN_ORDER.forEach(kind => {
     const meta = PLAN_KINDS[kind];
     const items = plansOf(kind);
@@ -931,8 +1143,16 @@ function renderPlanView(m) {
     m.appendChild(sec);
   });
   const note = el("div", "muted");
-  note.textContent = "「一覧」タブの「完了も表示」を選ぶと、直近1か月の検収済・清算済も出ます。";
+  note.textContent = shareOn()
+    ? `「完了も表示」で直近1か月の検収済・清算済も出ます。／共有: ${syncStatusText()}`
+    : "「完了も表示」を選ぶと、直近1か月の検収済・清算済も出ます。";
   m.appendChild(note);
+  if (shareOn()) {
+    const sync = el("button", "w100", "🔄 いま同期する");
+    sync.style.marginTop = "10px";
+    sync.addEventListener("click", () => syncShared(true));
+    m.appendChild(sync);
+  }
 }
 
 function renderIdeas(m) {
@@ -1058,12 +1278,14 @@ function toggleDone(id) {
     t.order = nextOrder(cellOf(t));
     t.updatedAt = nowIso();
     commit(before, "未完に戻す");
+    if (t.shared) scheduleSync();
     showToast("未完に戻しました", "取り消す", undo);
   } else {
     t.status = "done";
     t.completedAt = nowIso();
     t.updatedAt = nowIso();
     commit(before, "完了");
+    if (t.shared) scheduleSync();
     showToast("完了にしました", "取り消す", undo);
   }
 }
@@ -1079,6 +1301,7 @@ function advancePlan(id) {
   p.closedAt = isClosedPlan(p) ? (p.closedAt || nowIso()) : "";
   p.updatedAt = nowIso();
   commit(before, "状態変更");
+  scheduleSync();
   showToast(`${meta.statuses[next].name} にしました`, "取り消す", undo);
 }
 
@@ -1201,6 +1424,19 @@ function openTaskSheet(id) {
     tags.autocomplete = "off";
     sheet.appendChild(tags);
 
+    let sharedNow = existing ? !!t.shared : (shareOn() && !!prefs.shareNew);
+    let shareRow = null;
+    if (shareOn()) {
+      shareRow = el("label", "chk");
+      shareRow.style.cssText = "display:flex;align-items:center;gap:9px;margin-top:16px;font-size:14px;color:var(--text);";
+      const cb = el("input");
+      cb.type = "checkbox"; cb.checked = sharedNow; cb.style.width = "auto";
+      cb.addEventListener("change", () => { sharedNow = cb.checked; });
+      shareRow.appendChild(cb);
+      shareRow.appendChild(el("span", null, "🤝 妻と共有する"));
+      sheet.appendChild(shareRow);
+    }
+
     const resultWrap = el("div", status === "done" ? "" : "hidden");
     resultWrap.appendChild(el("label", null, "結果・気づき"));
     const result = el("textarea");
@@ -1224,10 +1460,14 @@ function openTaskSheet(id) {
       if (!prev || cellOf(prev) !== cellOf(after)) after.order = nextOrder(cellOf(after));
       if (after.status === "done" && (!prev || prev.status !== "done")) after.completedAt = nowIso();
       if (after.status !== "done") after.completedAt = "";
+      after.shared = shareOn() ? sharedNow : (prev ? prev.shared : false);
       after.updatedAt = nowIso();
       const before = snapshot();
       tasks.set(after.id, after);
+      /* 共有をやめたら、相手の端末からも消えるようにする */
+      if (prev && prev.shared && !after.shared) markGrave("tasks", after.id);
       commit(before, "保存");
+      if (after.shared || (prev && prev.shared)) scheduleSync();
       closeSheet();
       showToast(prev ? "保存しました" : "追加しました");
     });
@@ -1240,6 +1480,7 @@ function openTaskSheet(id) {
       del.setAttribute("aria-label", "削除");
       del.addEventListener("click", () => {
         const before = snapshot();
+        if (existing.shared) { markGrave("tasks", existing.id); scheduleSync(); }
         tasks.delete(existing.id);
         commit(before, "削除");
         closeSheet();
@@ -1339,6 +1580,7 @@ function openPlanSheet(kind, id) {
       const before = snapshot();
       plans.set(after.id, after);
       commit(before, "保存");
+      scheduleSync();
       closeSheet();
       showToast(existing ? "保存しました" : `${meta.name}を追加しました`);
     });
@@ -1352,7 +1594,9 @@ function openPlanSheet(kind, id) {
       del.addEventListener("click", () => {
         const before = snapshot();
         plans.delete(existing.id);
+        markGrave("plans", existing.id);
         commit(before, "削除");
+        scheduleSync();
         closeSheet();
         showToast("削除しました", "取り消す", undo);
       });
@@ -1467,6 +1711,45 @@ function openDataSheet() {
       "iPhoneはSafariのデータを消すことがあります。ときどき書き出して保管してください。"));
     sheet.appendChild(st);
 
+    const shcard = el("div", "card");
+    shcard.appendChild(el("h3", null, "🤝 妻と共有（発注・出張だけ）"));
+    shcard.appendChild(el("div", "muted", syncStatusText()));
+    const shrow = el("div", "grid2");
+    shrow.style.marginTop = "10px";
+    const setBtn = el("button", null, shareOn() ? "共有の設定" : "共有をはじめる");
+    setBtn.addEventListener("click", () => { closeSheet(); openShareSheet(); });
+    const syncBtn = el("button", null, "🔄 いま同期する");
+    syncBtn.addEventListener("click", () => { closeSheet(); syncShared(true); });
+    shrow.appendChild(setBtn); shrow.appendChild(syncBtn);
+    shcard.appendChild(shrow);
+    const simple = el("label", "chk");
+    simple.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--text);";
+    const cb = el("input");
+    cb.type = "checkbox"; cb.checked = !!prefs.simple; cb.style.width = "auto";
+    cb.addEventListener("change", () => {
+      prefs.simple = cb.checked;
+      savePrefs();
+      applySimpleMode();
+      render();
+    });
+    simple.appendChild(cb);
+    simple.appendChild(el("span", null, "かんたん表示（今日・カレンダー・予定だけにする）"));
+    shcard.appendChild(simple);
+
+    const newShare = el("label", "chk");
+    newShare.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--text);";
+    const cb2 = el("input");
+    cb2.type = "checkbox"; cb2.checked = !!prefs.shareNew; cb2.style.width = "auto";
+    cb2.addEventListener("change", () => { prefs.shareNew = cb2.checked; savePrefs(); });
+    newShare.appendChild(cb2);
+    newShare.appendChild(el("span", null, "新しいタスクを最初から共有にする"));
+    shcard.appendChild(newShare);
+
+    const cnt = [...tasks.values()].filter(t => t.shared).length;
+    shcard.appendChild(el("div", "muted",
+      `いま共有しているタスク: ${cnt} 件（タスクを開いて「🤝 妻と共有する」で切り替えます）`));
+    sheet.appendChild(shcard);
+
     sheet.appendChild(el("label", null, "バックアップ・PCへの持ち出し"));
     const g1 = el("div", "grid2");
     const b1 = el("button", null, "⬇ ファイルに書き出す");
@@ -1557,6 +1840,8 @@ function loadData() {
 function init() {
   loadPrefs();
   loadData();
+  loadShare();
+  applySimpleMode();
   $("todayLabel").textContent = todayStr();
 
   $("tabbar").addEventListener("click", e => {
@@ -1581,18 +1866,25 @@ function init() {
         g.appendChild(b);
       });
       sheet.appendChild(g);
-      const t = el("button", "w100", "タスクを追加");
-      t.style.marginTop = "10px";
-      t.addEventListener("click", () => { closeSheet(); openTaskSheet(null); });
-      sheet.appendChild(t);
+      if (!prefs.simple) {
+        const t = el("button", "w100", "タスクを追加");
+        t.style.marginTop = "10px";
+        t.addEventListener("click", () => { closeSheet(); openTaskSheet(null); });
+        sheet.appendChild(t);
+      }
     });
   });
   $("dataBtn").addEventListener("click", openDataSheet);
   window.addEventListener("keydown", e => { if (e.key === "Escape" && sheetOpen) closeSheet(); });
   /* 日付が変わったまま開きっぱなしでも、今日の表示がずれないようにする */
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    render();
+    syncShared(false);        /* 相手の変更を拾う */
+  });
 
   render();
+  if (shareOn()) { syncShared(false); startSyncTimer(); }
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
