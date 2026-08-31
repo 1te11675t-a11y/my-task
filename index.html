@@ -50,7 +50,7 @@
     margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Segoe UI", sans-serif;
     font-size: 15px; line-height: 1.5;
-    height: 100dvh; display: flex; flex-direction: column;
+    height: 100vh; height: 100dvh; display: flex; flex-direction: column;
     overflow: hidden; overscroll-behavior: none;
   }
   button, input, select, textarea { font-family: inherit; }
@@ -95,9 +95,12 @@
   code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
 
   /* ── 上下のバー ── */
+  /* 実際に見えている高さをJSで測って入れる（Safariのツールバー分のずれ対策） */
+  body.fit { height: var(--app-h); }
+
   .appbar {
     flex: 0 0 auto; z-index: 20;
-    padding: calc(var(--safe-t) + 10px) 14px 10px;
+    padding: 10px 14px;
     background: rgba(14,17,23,.92); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 10px;
@@ -118,8 +121,11 @@
     display: grid; grid-template-columns: repeat(5, 1fr);
     background: rgba(14,17,23,.95); backdrop-filter: blur(10px);
     border-top: 1px solid var(--border);
-    padding-bottom: var(--safe-b);
   }
+  /* ホーム画面から開いたときだけ、ホームバーとノッチの領域を避ける。
+     Safariのタブから開いたときはブラウザ側のバーがあるので余白を足さない */
+  body.standalone .appbar { padding-top: calc(var(--safe-t) + 10px); }
+  body.standalone .tabbar { padding-bottom: var(--safe-b); }
   .tabbar button {
     background: none; border: none; border-radius: 0; color: var(--muted);
     height: var(--bar); font-size: 11px; display: flex; flex-direction: column;
@@ -131,7 +137,7 @@
 
   #fab {
     position: fixed; right: 16px; z-index: 21;
-    bottom: calc(var(--bar) + var(--safe-b) + 16px);
+    bottom: calc(var(--bar) + 16px);
     width: 58px; height: 58px; border-radius: 50%;
     background: var(--accent); border: none; color: #fff; font-size: 30px;
     box-shadow: 0 6px 20px rgba(0,0,0,.45); padding: 0; line-height: 1;
@@ -223,7 +229,7 @@
     border-radius: 16px 16px 0 0; border-top: 1px solid var(--border);
     max-height: 92vh; max-height: 92dvh;
     overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-    padding: 8px 16px calc(var(--safe-b) + 20px);
+    padding: 8px 16px 20px;
     animation: up .18s ease-out;
   }
   @keyframes up { from { transform: translateY(24px); } to { transform: none; } }
@@ -251,13 +257,16 @@
 
   #toast {
     position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: calc(var(--bar) + var(--safe-b) + 78px); z-index: 60;
+    bottom: calc(var(--bar) + 78px); z-index: 60;
     background: var(--panel2); border: 1px solid var(--border); color: var(--text);
     padding: 10px 14px; border-radius: 12px; font-size: 14px; max-width: 92vw;
     display: flex; align-items: center; gap: 12px;
     opacity: 0; pointer-events: none; transition: opacity .2s;
   }
   #toast.show { opacity: 1; pointer-events: auto; }
+  body.standalone #fab { bottom: calc(var(--bar) + var(--safe-b) + 16px); }
+  body.standalone #toast { bottom: calc(var(--bar) + var(--safe-b) + 78px); }
+  body.standalone .sheet { padding-bottom: calc(var(--safe-b) + 20px); }
   #toast button { padding: 6px 10px; font-size: 13px; }
 
   /* ── アイデア ── */
@@ -364,7 +373,7 @@ let tasks = new Map();
 let plans = new Map();
 let ideas = [];                 /* 予定に入れる前の思いつき（ただの箇条書き） */
 let graves = { plans: [], tasks: [] };   /* 消したものの { id, deletedAt } */
-let share = { url: "", token: "", lastSync: "", lastError: "" };
+let share = { url: "", token: "", name: "", lastSync: "", lastError: "" };
 let syncing = false;
 let syncTimer = null;
 let syncPending = null;
@@ -399,6 +408,14 @@ function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); retu
 function mondayOf(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return addDays(x, -((x.getDay() + 6) % 7)); }
 function parseDay(ds) { return new Date(ds + "T00:00:00"); }
 function newId() { return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7); }
+/* 表計算を経由すると日付の形が変わることがあるので、緩く読み取って YYYY-MM-DD に戻す */
+function toDay(v) {
+  const t = String(v == null ? "" : v).trim();
+  if (!t) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const d = new Date(t);
+  return isNaN(d) ? "" : dateStr(d);
+}
 function md(ds) { return `${Number(ds.slice(5, 7))}/${Number(ds.slice(8, 10))}`; }
 
 function isoFromLegacy(s) {
@@ -473,7 +490,7 @@ function normalizeTask(raw) {
     title: String(t.title == null ? "" : t.title),
     note: String(t.note != null ? t.note : (t.reason || "")),
     importance: imp, urgency: urg, status: status,
-    due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || "") ? t.due : "",
+    due: toDay(t.due),
     tags: Array.isArray(t.tags)
       ? t.tags.map(x => String(x)).filter(Boolean)
       : String(t.tags == null ? "" : t.tags).split(/[\s,、]+/).filter(Boolean),
@@ -483,8 +500,10 @@ function normalizeTask(raw) {
     completedAt: completedAt,
     createdAt: createdAt,
     updatedAt: t.updatedAt || createdAt,
-    date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || "") ? t.date : (isNaN(cd) ? todayStr() : dateStr(cd)),
+    date: toDay(t.date) || (isNaN(cd) ? todayStr() : dateStr(cd)),
     carriedFrom: (t.carried_from != null) ? t.carried_from : (t.carriedFrom != null ? t.carriedFrom : null),
+    createdBy: String(t.createdBy || ""),
+    updatedBy: String(t.updatedBy || ""),
     shared: (t.shared === true || t.shared === "true"),
   };
 }
@@ -496,6 +515,7 @@ function taskObj(t) {
     completed_at: legacyFromIso(t.completedAt),
     note: t.note, importance: t.importance, urgency: t.urgency, status: t.status,
     bucket: t.bucket, tags: t.tags, completedAt: t.completedAt,
+    createdBy: t.createdBy, updatedBy: t.updatedBy,
     createdAt: t.createdAt, updatedAt: t.updatedAt, shared: t.shared,
   };
 }
@@ -505,6 +525,7 @@ function taskToWire(t) {
     id: t.id, title: t.title, note: t.note, importance: t.importance, urgency: t.urgency,
     status: t.status, due: t.due, tags: (t.tags || []).join(" "), bucket: t.bucket,
     order: t.order, result: t.result, completedAt: t.completedAt, date: t.date,
+    createdBy: t.createdBy, updatedBy: t.updatedBy,
     createdAt: t.createdAt, updatedAt: t.updatedAt,
   };
 }
@@ -514,7 +535,7 @@ function normalizePlan(raw) {
   const p = (raw && typeof raw === "object") ? raw : {};
   const kind = (p.kind === "trip") ? "trip" : "order";
   const meta = PLAN_KINDS[kind];
-  const dateOk = s => /^\d{4}-\d{2}-\d{2}$/.test(s || "");
+  /* 日付の形が崩れていても拾えるようにする */
   return {
     id: (typeof p.id === "string" && p.id) ? p.id : newId(),
     kind: kind,
@@ -522,11 +543,13 @@ function normalizePlan(raw) {
     partner: String(p.partner || p.vendor || ""),
     purpose: String(p.purpose || ""),
     amount: String(p.amount || ""),
-    date: dateOk(p.date) ? p.date : "",
-    endDate: dateOk(p.endDate) ? p.endDate : "",
+    date: toDay(p.date),
+    endDate: toDay(p.endDate),
     status: meta.statuses[p.status] ? p.status : (LEGACY_PLAN_STATUS[kind][p.status] || meta.order[0]),
     note: String(p.note || ""),
     closedAt: String(p.closedAt || ""),
+    createdBy: String(p.createdBy || ""),
+    updatedBy: String(p.updatedBy || ""),
     createdAt: p.createdAt || nowIso(),
     updatedAt: p.updatedAt || p.createdAt || nowIso(),
   };
@@ -535,7 +558,8 @@ function planObj(p) {
   return {
     id: p.id, kind: p.kind, title: p.title, partner: p.partner, purpose: p.purpose,
     amount: p.amount, date: p.date, endDate: p.endDate, status: p.status, note: p.note,
-    closedAt: p.closedAt, createdAt: p.createdAt, updatedAt: p.updatedAt,
+    closedAt: p.closedAt, createdBy: p.createdBy, updatedBy: p.updatedBy,
+    createdAt: p.createdAt, updatedAt: p.updatedAt,
   };
 }
 function clonePlan(p) { return normalizePlan(planObj(p)); }
@@ -723,6 +747,28 @@ function saveGraves() {
   try { localStorage.setItem(LS_GRAVES, JSON.stringify(graves)); } catch (e) { /* 続行 */ }
 }
 function shareOn() { return !!(share.url && share.token); }
+function myName() { return share.name || ""; }
+
+/* 誰が作って、誰が最後に直したかを残す */
+function stampWho(o, isNew) {
+  const who = myName();
+  if (!who) return;
+  if (isNew || !o.createdBy) o.createdBy = who;
+  o.updatedBy = who;
+}
+/* 画面に出す名前。作った人を優先し、無ければ最後に直した人 */
+function whoOf(o) { return o.createdBy || o.updatedBy || ""; }
+
+/* 編集画面の1行説明。「だれが作って、だれが最後に直したか」 */
+function whoLine(o, base) {
+  const parts = [];
+  if (base) parts.push(base);
+  if (o.createdBy) parts.push(`作成 ${o.createdBy}`);
+  if (o.updatedBy && o.updatedBy !== o.createdBy) {
+    parts.push(`最終更新 ${o.updatedBy} ${fmtDateTime(o.updatedAt)}`);
+  }
+  return parts.join("　/　");
+}
 
 /* 予定を消したことを覚えておく（相手の端末から復活させないため） */
 function markGrave(kind, id) {
@@ -823,6 +869,12 @@ function openShareSheet() {
     token.type = "text"; token.value = share.token; token.autocomplete = "off"; token.spellcheck = false;
     sheet.appendChild(token);
 
+    sheet.appendChild(el("label", null, "自分の名前（相手の画面に出ます）"));
+    const name = el("input");
+    name.type = "text"; name.value = share.name; name.placeholder = "例: たろう";
+    name.autocomplete = "off";
+    sheet.appendChild(name);
+
     const st = el("div", "card");
     st.style.marginTop = "14px";
     st.appendChild(el("h3", null, "状態"));
@@ -834,6 +886,7 @@ function openShareSheet() {
     ok.addEventListener("click", async () => {
       share.url = url.value.trim();
       share.token = token.value.trim();
+      share.name = name.value.trim().slice(0, 12);
       share.lastError = "";
       saveShare();
       closeSheet();
@@ -849,7 +902,7 @@ function openShareSheet() {
       const off = el("button", "danger w100", "共有をやめる（この端末だけ）");
       off.style.marginTop = "10px";
       off.addEventListener("click", () => {
-        share = { url: "", token: "", lastSync: "", lastError: "" };
+        share = { url: "", token: "", name: share.name, lastSync: "", lastError: "" };
         saveShare();
         clearInterval(syncTimer);
         closeSheet();
@@ -886,7 +939,10 @@ function taskRow(t, opts) {
   if (t.status !== "todo") meta.appendChild(el("span", "badge st-" + t.status, STATUSES[t.status].name));
   const db = dueBadge(t);
   if (db) meta.appendChild(el("span", "badge " + db.cls, db.text));
-  if (t.shared) meta.appendChild(el("span", "badge shared", "🤝 共有"));
+  if (t.shared) {
+    const who = whoOf(t);
+    meta.appendChild(el("span", "badge shared", who ? "🤝 " + who : "🤝 共有"));
+  }
   (t.tags || []).forEach(tag => meta.appendChild(el("span", "badge", "#" + tag)));
   if (meta.children.length) body.appendChild(meta);
   body.addEventListener("click", () => openTaskSheet(t.id));
@@ -920,6 +976,10 @@ function planRow(p) {
   }
   const sub = [p.partner, p.purpose, p.amount].filter(Boolean).join(" / ");
   if (sub) m.appendChild(el("span", "badge", sub));
+  if (shareOn()) {
+    const who = whoOf(p);
+    if (who) m.appendChild(el("span", "badge shared", "🤝 " + who));
+  }
   body.appendChild(m);
   body.addEventListener("click", () => openPlanSheet(p.kind, p.id));
   row.appendChild(body);
@@ -1288,6 +1348,7 @@ function toggleDone(id) {
     t.status = "todo";
     t.completedAt = "";
     t.order = nextOrder(cellOf(t));
+    stampWho(t, false);
     t.updatedAt = nowIso();
     commit(before, "未完に戻す");
     if (t.shared) scheduleSync();
@@ -1295,6 +1356,7 @@ function toggleDone(id) {
   } else {
     t.status = "done";
     t.completedAt = nowIso();
+    stampWho(t, false);
     t.updatedAt = nowIso();
     commit(before, "完了");
     if (t.shared) scheduleSync();
@@ -1311,6 +1373,7 @@ function advancePlan(id) {
   const before = snapshot();
   p.status = next;
   p.closedAt = isClosedPlan(p) ? (p.closedAt || nowIso()) : "";
+  stampWho(p, false);
   p.updatedAt = nowIso();
   commit(before, "状態変更");
   scheduleSync();
@@ -1381,7 +1444,7 @@ function openTaskSheet(id) {
 
   openSheet(sheet => {
     sheet.appendChild(el("h2", null, existing ? "タスクを編集" : "タスクを追加"));
-    if (existing) sheet.appendChild(el("div", "muted", `登録 ${t.date}`));
+    if (existing) sheet.appendChild(el("div", "muted", whoLine(t, `登録 ${t.date}`)));
 
     sheet.appendChild(el("label", null, "タスク名"));
     const title = el("input");
@@ -1477,6 +1540,7 @@ function openTaskSheet(id) {
       if (after.status === "done" && (!prev || prev.status !== "done")) after.completedAt = nowIso();
       if (after.status !== "done") after.completedAt = "";
       after.shared = shareOn() ? sharedNow : (prev ? prev.shared : false);
+      stampWho(after, !prev);
       after.updatedAt = nowIso();
       const before = snapshot();
       tasks.set(after.id, after);
@@ -1518,6 +1582,10 @@ function openPlanSheet(kind, id) {
 
   openSheet(sheet => {
     sheet.appendChild(el("h2", null, `${meta.icon} ${meta.name}を${existing ? "編集" : "追加"}`));
+    if (existing) {
+      const line = whoLine(p, "");
+      if (line) sheet.appendChild(el("div", "muted", line));
+    }
 
     sheet.appendChild(el("label", null, meta.titleLabel));
     const title = el("input");
@@ -1590,6 +1658,7 @@ function openPlanSheet(kind, id) {
       after.date = $("pDate").value || "";
       after.endDate = endInput ? (endInput.value || "") : "";
       after.note = note.value.trim();
+      stampWho(after, !existing);
       after.updatedAt = nowIso();
       if (isClosedPlan(after)) { if (!after.closedAt) after.closedAt = nowIso(); }
       else after.closedAt = "";
@@ -1851,7 +1920,22 @@ function loadData() {
   setStateFromObj(state || { tasks: [], plans: [], ideas: [] });
 }
 
+/* 見えている高さぴったりに画面を合わせる（下に余白が出ないようにする）。
+   まだ測れないときはCSS側（100dvh）に任せる */
+function fitHeight() {
+  const h = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (h < 200) { document.body.classList.remove("fit"); return; }
+  document.documentElement.style.setProperty("--app-h", h + "px");
+  document.body.classList.add("fit");
+}
+
 function init() {
+  if (window.navigator.standalone || window.matchMedia("(display-mode: standalone)").matches) {
+    document.body.classList.add("standalone");
+  }
+  fitHeight();
+  window.addEventListener("resize", fitHeight);
+  window.addEventListener("orientationchange", () => setTimeout(fitHeight, 250));
   loadPrefs();
   loadData();
   loadShare();
@@ -1893,6 +1977,7 @@ function init() {
   /* 日付が変わったまま開きっぱなしでも、今日の表示がずれないようにする */
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
+    fitHeight();
     render();
     syncShared(false);        /* 相手の変更を拾う */
   });

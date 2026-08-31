@@ -2,7 +2,7 @@
    ページ本体は「まずネットワーク、だめならキャッシュ」。
    更新したファイルをGitHubに上げれば、次にオンラインで開いたときに反映されます。 */
 
-const CACHE = "private-task-v4";
+const CACHE = "private-task-v5";
 const ASSETS = [
   "./",
   "./index.html",
