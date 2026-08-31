@@ -67,6 +67,18 @@
     background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
   }
   textarea { min-height: 76px; resize: vertical; }
+  /* 入力欄の共通スタイルがチェックボックスを潰さないようにする */
+  input[type="checkbox"] {
+    -webkit-appearance: checkbox; appearance: checkbox;
+    width: 22px; height: 22px; min-width: 22px; flex: 0 0 auto;
+    padding: 0; border: none; border-radius: 0; background: none;
+    accent-color: var(--accent);
+  }
+  label.chk {
+    display: flex; align-items: center; gap: 10px;
+    margin: 12px 0 0; padding: 10px 2px;
+    font-size: 14px; color: var(--text); cursor: pointer;
+  }
   label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 5px; }
   button {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
@@ -631,7 +643,7 @@ function save() {
   try { localStorage.setItem(LS_DATA, JSON.stringify(buildFileObj())); }
   catch (e) { showToast("保存できませんでした（空き容量をご確認ください）"); }
 }
-/* 妻の端末など、共有の予定だけ見たいとき用 */
+/* 家族の端末など、共有の予定だけ見たいとき用 */
 function applySimpleMode() {
   const bar = $("tabbar");
   bar.classList.toggle("simple", !!prefs.simple);
@@ -1425,16 +1437,20 @@ function openTaskSheet(id) {
     sheet.appendChild(tags);
 
     let sharedNow = existing ? !!t.shared : (shareOn() && !!prefs.shareNew);
-    let shareRow = null;
     if (shareOn()) {
-      shareRow = el("label", "chk");
-      shareRow.style.cssText = "display:flex;align-items:center;gap:9px;margin-top:16px;font-size:14px;color:var(--text);";
-      const cb = el("input");
-      cb.type = "checkbox"; cb.checked = sharedNow; cb.style.width = "auto";
-      cb.addEventListener("change", () => { sharedNow = cb.checked; });
-      shareRow.appendChild(cb);
-      shareRow.appendChild(el("span", null, "🤝 妻と共有する"));
-      sheet.appendChild(shareRow);
+      sheet.appendChild(el("label", null, "共有"));
+      const shareSeg = el("div", "seg");
+      [[false, "自分だけ"], [true, "🤝 家族と共有"]].forEach(([v, label]) => {
+        const b = el("button", sharedNow === v ? "on" : "", label);
+        b.type = "button";
+        b.addEventListener("click", () => {
+          sharedNow = v;
+          [...shareSeg.children].forEach(x => x.classList.remove("on"));
+          b.classList.add("on");
+        });
+        shareSeg.appendChild(b);
+      });
+      sheet.appendChild(shareSeg);
     }
 
     const resultWrap = el("div", status === "done" ? "" : "hidden");
@@ -1712,7 +1728,7 @@ function openDataSheet() {
     sheet.appendChild(st);
 
     const shcard = el("div", "card");
-    shcard.appendChild(el("h3", null, "🤝 妻と共有（発注・出張だけ）"));
+    shcard.appendChild(el("h3", null, "🤝 家族と共有"));
     shcard.appendChild(el("div", "muted", syncStatusText()));
     const shrow = el("div", "grid2");
     shrow.style.marginTop = "10px";
@@ -1723,9 +1739,8 @@ function openDataSheet() {
     shrow.appendChild(setBtn); shrow.appendChild(syncBtn);
     shcard.appendChild(shrow);
     const simple = el("label", "chk");
-    simple.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--text);";
     const cb = el("input");
-    cb.type = "checkbox"; cb.checked = !!prefs.simple; cb.style.width = "auto";
+    cb.type = "checkbox"; cb.checked = !!prefs.simple;
     cb.addEventListener("change", () => {
       prefs.simple = cb.checked;
       savePrefs();
@@ -1737,9 +1752,8 @@ function openDataSheet() {
     shcard.appendChild(simple);
 
     const newShare = el("label", "chk");
-    newShare.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--text);";
     const cb2 = el("input");
-    cb2.type = "checkbox"; cb2.checked = !!prefs.shareNew; cb2.style.width = "auto";
+    cb2.type = "checkbox"; cb2.checked = !!prefs.shareNew;
     cb2.addEventListener("change", () => { prefs.shareNew = cb2.checked; savePrefs(); });
     newShare.appendChild(cb2);
     newShare.appendChild(el("span", null, "新しいタスクを最初から共有にする"));
@@ -1747,7 +1761,7 @@ function openDataSheet() {
 
     const cnt = [...tasks.values()].filter(t => t.shared).length;
     shcard.appendChild(el("div", "muted",
-      `いま共有しているタスク: ${cnt} 件（タスクを開いて「🤝 妻と共有する」で切り替えます）`));
+      `共有中のタスク ${cnt} 件（タスクを開いて「共有」を切り替えます）。予定は全部が共有されます。`));
     sheet.appendChild(shcard);
 
     sheet.appendChild(el("label", null, "バックアップ・PCへの持ち出し"));
