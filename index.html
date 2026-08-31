@@ -44,11 +44,14 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { -webkit-text-size-adjust: 100%; }
   html, body { height: 100%; }
+  /* 画面そのものはスクロールさせず、中身（main）だけを動かす。
+     こうしないとiOS Safariのツールバーが伸び縮みして、下のタブの位置が上下にずれる */
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Segoe UI", sans-serif;
     font-size: 15px; line-height: 1.5;
-    overscroll-behavior-y: none;
+    height: 100dvh; display: flex; flex-direction: column;
+    overflow: hidden; overscroll-behavior: none;
   }
   button, input, select, textarea { font-family: inherit; }
   /* iOS で入力時に画面が拡大しないよう、入力欄は必ず16px以上 */
@@ -81,7 +84,7 @@
 
   /* ── 上下のバー ── */
   .appbar {
-    position: sticky; top: 0; z-index: 20;
+    flex: 0 0 auto; z-index: 20;
     padding: calc(var(--safe-t) + 10px) 14px 10px;
     background: rgba(14,17,23,.92); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
@@ -92,12 +95,14 @@
   .appbar button { padding: 8px 12px; font-size: 14px; }
 
   main {
-    padding: 12px 12px calc(var(--bar) + var(--safe-b) + 84px);
-    max-width: 760px; margin: 0 auto;
+    flex: 1 1 auto; min-height: 0;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    padding: 12px 12px 96px;
+    width: 100%; max-width: 760px; margin: 0 auto;
   }
 
   .tabbar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    flex: 0 0 auto; z-index: 20;
     display: grid; grid-template-columns: repeat(5, 1fr);
     background: rgba(14,17,23,.95); backdrop-filter: blur(10px);
     border-top: 1px solid var(--border);
@@ -196,16 +201,21 @@
   /* ── シート（下から出るモーダル） ── */
   .backdrop {
     position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 40;
+    height: 100dvh;   /* Safariのツールバー分を含めない、実際に見えている高さ */
     display: flex; align-items: flex-end; justify-content: center;
   }
   .sheet {
     background: var(--panel); width: 100%; max-width: 760px;
     border-radius: 16px 16px 0 0; border-top: 1px solid var(--border);
-    max-height: 92vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    max-height: 92vh; max-height: 92dvh;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     padding: 8px 16px calc(var(--safe-b) + 20px);
     animation: up .18s ease-out;
   }
   @keyframes up { from { transform: translateY(24px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet { animation: none; }
+  }
   .grip { width: 38px; height: 4px; border-radius: 2px; background: var(--border); margin: 6px auto 10px; }
   .sheet h2 { font-size: 16px; margin: 0 0 4px; }
   .sheet .acts { display: flex; gap: 8px; margin-top: 18px; }
@@ -227,7 +237,7 @@
 
   #toast {
     position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: calc(var(--bar) + var(--safe-b) + 82px); z-index: 60;
+    bottom: calc(var(--bar) + var(--safe-b) + 78px); z-index: 60;
     background: var(--panel2); border: 1px solid var(--border); color: var(--text);
     padding: 10px 14px; border-radius: 12px; font-size: 14px; max-width: 92vw;
     display: flex; align-items: center; gap: 12px;
@@ -1554,7 +1564,7 @@ function init() {
     if (!b) return;
     view = b.dataset.v;
     render();
-    window.scrollTo({ top: 0 });
+    $("main").scrollTop = 0;
   });
   $("fab").addEventListener("click", () => {
     if (view === "idea") { const i = $("ideaInput"); if (i) i.focus(); return; }
