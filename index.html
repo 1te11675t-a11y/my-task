@@ -98,7 +98,7 @@
 
   .tabbar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(5, 1fr);
     background: rgba(14,17,23,.95); backdrop-filter: blur(10px);
     border-top: 1px solid var(--border);
     padding-bottom: var(--safe-b);
@@ -236,6 +236,13 @@
   #toast.show { opacity: 1; pointer-events: auto; }
   #toast button { padding: 6px 10px; font-size: 13px; }
 
+  /* ── アイデア ── */
+  .idea-add { display: flex; gap: 8px; margin-bottom: 14px; }
+  .idea-add input { flex: 1; min-width: 0; }
+  .idea-add button { flex: 0 0 auto; }
+  .row.idea .body { padding-left: 12px; }
+  .row.idea .ttl { font-weight: 500; }
+
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 12px; padding: 13px 14px; margin-bottom: 10px;
@@ -261,6 +268,7 @@
   <button data-v="list"><span class="ic">🗂</span>一覧</button>
   <button data-v="cal"><span class="ic">📅</span>カレンダー</button>
   <button data-v="plan"><span class="ic">📦</span>予定</button>
+  <button data-v="idea"><span class="ic">💡</span>アイデア</button>
 </nav>
 
 <div id="sheetRoot"></div>
@@ -327,6 +335,7 @@ const LEGACY_PLAN_STATUS = {
 
 let tasks = new Map();
 let plans = new Map();
+let ideas = [];                 /* 予定に入れる前の思いつき（ただの箇条書き） */
 let prefs = { showDone: false, listFilter: "open" };
 let view = "today";
 let undoStack = [];
@@ -490,8 +499,22 @@ function isClosedPlan(p) {
   const s = PLAN_KINDS[p.kind].statuses[p.status];
   return !!(s && s.closed);
 }
+function normalizeIdea(raw) {
+  const i = (raw && typeof raw === "object") ? raw : { text: String(raw == null ? "" : raw) };
+  return {
+    id: (typeof i.id === "string" && i.id) ? i.id : newId(),
+    text: String(i.text == null ? "" : i.text),
+    createdAt: i.createdAt || nowIso(),
+  };
+}
+function ideaObj(i) { return { id: i.id, text: i.text, createdAt: i.createdAt }; }
+
 function buildFileObj() {
-  return { tasks: [...tasks.values()].map(taskObj), plans: [...plans.values()].map(planObj) };
+  return {
+    tasks: [...tasks.values()].map(taskObj),
+    plans: [...plans.values()].map(planObj),
+    ideas: ideas.map(ideaObj),
+  };
 }
 
 function nextOrder(cell) {
@@ -552,13 +575,20 @@ function plansOf(kind, opts) {
   }).sort((a, b) => {
     const ca = isClosedPlan(a) ? 1 : 0, cb = isClosedPlan(b) ? 1 : 0;
     if (ca !== cb) return ca - cb;
-    const da = a.date || "9999-99-99", db = b.date || "9999-99-99";
-    if (da !== db) return da.localeCompare(db);
+    const ad = a.date ? 1 : 0, bd = b.date ? 1 : 0;
+    if (ad !== bd) return ad - bd;              /* 日付なしが先 */
+    if (a.date && b.date && a.date !== b.date) return a.date.localeCompare(b.date);
     return String(a.createdAt).localeCompare(String(b.createdAt));
   });
 }
+/* 日付の入っていないものが先。そのあとを期限の early → late で並べる */
 function sortForBoard(list) {
-  return list.slice().sort((a, b) => (a.order - b.order) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  return list.slice().sort((a, b) => {
+    const ad = a.due ? 1 : 0, bd = b.due ? 1 : 0;
+    if (ad !== bd) return ad - bd;
+    if (a.due && b.due && a.due !== b.due) return a.due.localeCompare(b.due);
+    return (a.order - b.order) || String(a.createdAt).localeCompare(String(b.createdAt));
+  });
 }
 
 /* ============================================================
@@ -580,13 +610,18 @@ function setStateFromObj(state) {
     while (plans.has(p.id)) p.id = newId();
     plans.set(p.id, p);
   });
+  ideas = (state.ideas || []).map(normalizeIdea).filter(i => i.text);
 }
 function parseStateText(txt) {
   try {
     const obj = JSON.parse(txt);
     const arr = Array.isArray(obj) ? obj : (obj && obj.tasks);
     if (!Array.isArray(arr)) return null;
-    return { tasks: arr, plans: (obj && Array.isArray(obj.plans)) ? obj.plans : [] };
+    return {
+      tasks: arr,
+      plans: (obj && Array.isArray(obj.plans)) ? obj.plans : [],
+      ideas: (obj && Array.isArray(obj.ideas)) ? obj.ideas : [],
+    };
   } catch (e) { return null; }
 }
 function snapshot() { return JSON.stringify(buildFileObj()); }
@@ -700,6 +735,7 @@ function render() {
   if (view === "today") { $("appTitle").firstChild.textContent = "今日"; renderToday(m); }
   else if (view === "list") { $("appTitle").firstChild.textContent = "一覧"; renderList(m); }
   else if (view === "cal") { $("appTitle").firstChild.textContent = "カレンダー"; renderCal(m); }
+  else if (view === "idea") { $("appTitle").firstChild.textContent = "アイデア"; renderIdeas(m); }
   else { $("appTitle").firstChild.textContent = "予定"; renderPlanView(m); }
 }
 
@@ -887,6 +923,115 @@ function renderPlanView(m) {
   const note = el("div", "muted");
   note.textContent = "「一覧」タブの「完了も表示」を選ぶと、直近1か月の検収済・清算済も出ます。";
   m.appendChild(note);
+}
+
+function renderIdeas(m) {
+  const box = el("div", "idea-add");
+  const input = el("input");
+  input.type = "text";
+  input.id = "ideaInput";
+  input.placeholder = "思いついたことを書く";
+  input.autocomplete = "off";
+  input.enterKeyHint = "done";
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addIdea(); } });
+  const btn = el("button", "primary", "追加");
+  btn.addEventListener("click", addIdea);
+  box.appendChild(input);
+  box.appendChild(btn);
+  m.appendChild(box);
+
+  if (!ideas.length) {
+    const e = el("div", "empty");
+    e.appendChild(el("div", "lead", "アイデアはまだありません"));
+    e.appendChild(el("div", null,
+      "予定にする前の思いつきを、ここに箇条書きで置いておけます。右の → でタスク（着手前）に移せます。"));
+    m.appendChild(e);
+    return;
+  }
+
+  const list = el("div", "list");
+  ideas.forEach(i => {
+    const row = el("div", "row idea");
+    row.style.setProperty("--row-color", "var(--idea)");
+    const body = el("button", "body");
+    body.appendChild(el("div", "ttl", i.text));
+    body.addEventListener("click", () => openIdeaSheet(i.id));
+    row.appendChild(body);
+    const conv = el("button", "tick", "→");
+    conv.setAttribute("aria-label", "タスクにする");
+    conv.addEventListener("click", e => { e.stopPropagation(); ideaToTask(i.id); });
+    row.appendChild(conv);
+    list.appendChild(row);
+  });
+  m.appendChild(list);
+  m.appendChild(el("div", "muted", `${ideas.length} 件。タップで編集、→ でタスクの「着手前」に移します。`));
+}
+
+function addIdea() {
+  const input = $("ideaInput");
+  const v = input.value.trim();
+  if (!v) { input.focus(); return; }
+  const before = snapshot();
+  ideas.unshift(normalizeIdea({ text: v }));
+  commit(before, "アイデア追加");
+  const again = $("ideaInput");
+  if (again) again.focus();
+}
+
+function ideaToTask(id) {
+  const idx = ideas.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const before = snapshot();
+  const t = normalizeTask({
+    id: newId(), title: ideas[idx].text, importance: "high", urgency: "low",
+    bucket: "idea", status: "todo", createdAt: nowIso(), date: todayStr(),
+  });
+  t.order = nextOrder("IDEA");
+  tasks.set(t.id, t);
+  ideas.splice(idx, 1);
+  commit(before, "タスクにする");
+  showToast("タスクの「着手前」に移しました", "取り消す", undo);
+}
+
+function openIdeaSheet(id) {
+  const i = ideas.find(x => x.id === id);
+  if (!i) return;
+  openSheet(sheet => {
+    sheet.appendChild(el("h2", null, "アイデア"));
+    const ta = el("textarea");
+    ta.value = i.text;
+    sheet.appendChild(ta);
+
+    const conv = el("button", "w100", "→ タスク（着手前）にする");
+    conv.style.marginTop = "12px";
+    conv.addEventListener("click", () => { closeSheet(); ideaToTask(id); });
+    sheet.appendChild(conv);
+
+    const acts = el("div", "acts");
+    const ok = el("button", "primary", "保存");
+    ok.addEventListener("click", () => {
+      const v = ta.value.trim();
+      if (!v) { showToast("内容を入力してください"); return; }
+      const before = snapshot();
+      i.text = v;
+      commit(before, "アイデア編集");
+      closeSheet();
+    });
+    const cancel = el("button", null, "閉じる");
+    cancel.addEventListener("click", closeSheet);
+    const del = el("button", "danger slim", "🗑");
+    del.setAttribute("aria-label", "削除");
+    del.addEventListener("click", () => {
+      const before = snapshot();
+      const k = ideas.findIndex(x => x.id === id);
+      if (k >= 0) ideas.splice(k, 1);
+      commit(before, "アイデア削除");
+      closeSheet();
+      showToast("削除しました", "取り消す", undo);
+    });
+    acts.appendChild(ok); acts.appendChild(cancel); acts.appendChild(del);
+    sheet.appendChild(acts);
+  });
 }
 
 /* ============================================================
@@ -1305,6 +1450,7 @@ function openDataSheet() {
     };
     kv("タスク", `${tasks.size} 件`);
     kv("発注・出張の予定", `${plans.size} 件`);
+    kv("アイデア", `${ideas.length} 件`);
     const lb = lastBackup();
     kv("最後の書き出し", lb ? fmtDateTime(lb) : "まだありません");
     st.appendChild(el("div", "muted",
@@ -1395,7 +1541,7 @@ function loadPrefs() {
 function loadData() {
   let state = null;
   try { state = parseStateText(localStorage.getItem(LS_DATA) || ""); } catch (e) { state = null; }
-  setStateFromObj(state || { tasks: [], plans: [] });
+  setStateFromObj(state || { tasks: [], plans: [], ideas: [] });
 }
 
 function init() {
@@ -1411,6 +1557,7 @@ function init() {
     window.scrollTo({ top: 0 });
   });
   $("fab").addEventListener("click", () => {
+    if (view === "idea") { const i = $("ideaInput"); if (i) i.focus(); return; }
     if (view !== "plan") { openTaskSheet(null); return; }
     /* 予定タブでは、発注か出張かを選んでもらう */
     openSheet(sheet => {
