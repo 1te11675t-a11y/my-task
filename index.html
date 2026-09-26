@@ -58,7 +58,7 @@
   input, select, textarea {
     font-size: 16px; width: 100%; background: var(--bg); color: var(--text);
     border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px;
-    -webkit-appearance: none; appearance: none;
+    -webkit-appearance: none; appearance: none; touch-action: manipulation;
   }
   select {
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
@@ -216,6 +216,9 @@
   .cal .d.sel { background: var(--panel2); border-color: var(--accent2); border-width: 2px; }
   .cal .d .dots { display: flex; gap: 2px; height: 5px; }
   .cal .d .dots i { width: 5px; height: 5px; border-radius: 50%; display: block; }
+  .cal .d.sun > span:first-child { color: #ff9b9b; }
+  .cal .d.sat > span:first-child { color: #8ab4ff; }
+  .cal .d.hol > span:first-child { color: var(--accent); }
   .daylist-head { font-size: 13px; color: var(--muted); margin: 0 2px 7px; }
 
   /* ── シート（下から出るモーダル） ── */
@@ -288,7 +291,7 @@
 <body>
 
 <header class="appbar">
-  <h1 id="appTitle">今日<span class="sub" id="todayLabel"></span></h1>
+  <h1 id="appTitle">今週<span class="sub" id="todayLabel"></span></h1>
   <button id="dataBtn" aria-label="データ">⚙</button>
 </header>
 
@@ -297,7 +300,7 @@
 <button id="fab" aria-label="追加">＋</button>
 
 <nav class="tabbar" id="tabbar">
-  <button data-v="today" class="active"><span class="ic">☀️</span>今日</button>
+  <button data-v="today" class="active"><span class="ic">📋</span>今週</button>
   <button data-v="list"><span class="ic">🗂</span>一覧</button>
   <button data-v="cal"><span class="ic">📅</span>カレンダー</button>
   <button data-v="plan"><span class="ic">📦</span>予定</button>
@@ -333,40 +336,38 @@ const CELLS = {
   WAITING: { name: "回答待ち", short: "回答待ち", hint: "相手の返信待ち", color: "var(--waiting)", legacy: "WAITING" },
   IDEA: { name: "着手前", short: "着手前", hint: "まだ始めていない", color: "var(--idea)", legacy: "IDEA" },
 };
-const CELL_ORDER = ["Q1", "Q2", "Q3", "Q4", "WAITING", "IDEA"];
+const CELL_ORDER = ["Q1", "Q2", "Q3", "Q4"];
 const LEGACY_TO_CELL = {
   A: "Q1", B: "Q2", C: "Q3", D: "Q4", WAITING: "WAITING", IDEA: "IDEA",
   Q1: "Q1", Q2: "Q2", Q3: "Q3", Q4: "Q4",
 };
-const STATUSES = { todo: { name: "未着手" }, doing: { name: "進行中" }, done: { name: "完了" } };
-const STATUS_ORDER = ["todo", "doing", "done"];
+const STATUSES = { todo: { name: "未着手" }, done: { name: "完了" } };
+const STATUS_ORDER = ["todo", "done"];
 
 const PLAN_KINDS = {
   order: {
-    name: "発注", icon: "📦", color: "var(--order)", empty: "発注の予定はありません",
-    titleLabel: "品名・内容", partnerLabel: "発注先", dateLabel: "希望納期・入荷予定",
+    name: "買い物リスト", icon: "🛒", color: "var(--order)", empty: "買い物リストは空です",
+    titleLabel: "品名", partnerLabel: "お店", dateLabel: "購入予定日",
     hasAmount: true, hasPurpose: false, hasEnd: false,
-    order: ["quote", "ordered", "accepted"],
+    order: ["todo"],
     statuses: {
-      quote: { name: "見積もり中" }, ordered: { name: "発注済" },
-      accepted: { name: "検収済", closed: true },
+      todo: { name: "未購入" },
     },
   },
   trip: {
     name: "出張", icon: "✈", color: "var(--trip)", empty: "出張の予定はありません",
     titleLabel: "行き先", partnerLabel: "訪問先・同行者", dateLabel: "出発日",
     hasAmount: false, hasPurpose: true, hasEnd: true,
-    order: ["arranging", "applied", "settled"],
+    order: ["todo"],
     statuses: {
-      arranging: { name: "調整中" }, applied: { name: "申請済" },
-      settled: { name: "清算済", closed: true },
+      todo: { name: "予定" },
     },
   },
 };
 const PLAN_ORDER = ["order", "trip"];
 const LEGACY_PLAN_STATUS = {
-  order: { plan: "quote", applying: "quote", delivered: "accepted" },
-  trip: { plan: "arranging", applying: "applied", fixed: "applied", done: "settled" },
+  order: { plan: "todo", applying: "todo", delivered: "todo", quote: "todo", ordered: "todo", accepted: "todo" },
+  trip: { plan: "todo", applying: "todo", fixed: "todo", done: "todo", arranging: "todo", applied: "todo", settled: "todo" },
 };
 
 let tasks = new Map();
@@ -454,8 +455,8 @@ function quadrantOf(importance, urgency) {
   return urgency === "high" ? "Q3" : "Q4";
 }
 function cellOf(t) {
-  if (t.bucket === "waiting") return "WAITING";
-  if (t.bucket === "idea") return "IDEA";
+  /* "waiting" バケットは廃止 → 重要・緊急でない（Q2相当）として扱う */
+  /* "idea" バケットは廃止 → 重要・緊急でない（Q2相当）として扱う */
   return quadrantOf(t.importance, t.urgency);
 }
 function applyCell(t, cell) {
@@ -915,6 +916,54 @@ function openShareSheet() {
 }
 
 /* ============================================================
+   祝日（日本）
+   ============================================================ */
+let _holCache = {};
+function getHols(y) {
+  if (_holCache[y]) return _holCache[y];
+  const set = new Set();
+  const add = (m, d) => { if (d >= 1 && d <= 31) set.add(`${y}-${pad2(m)}-${pad2(d)}`); };
+  const nthMon = (m, nth) => {
+    let d = 1, cnt = 0;
+    while (true) { if (new Date(y, m - 1, d).getDay() === 1) { if (++cnt === nth) return d; } d++; }
+  };
+  /* 固定祝日 */
+  add(1, 1); add(2, 11); add(2, 23); add(4, 29);
+  add(5, 3); add(5, 4); add(5, 5); add(8, 11);
+  add(11, 3); add(11, 23);
+  /* 移動祝日（月曜） */
+  add(1, nthMon(1, 2));   /* 成人の日 */
+  add(7, nthMon(7, 3));   /* 海の日 */
+  add(9, nthMon(9, 3));   /* 敬老の日 */
+  add(10, nthMon(10, 2)); /* スポーツの日 */
+  /* 春分・秋分（簡易計算） */
+  const yy = y - 1980;
+  add(3, Math.floor(20.8431 + 0.242194 * yy - Math.floor(yy / 4)));
+  add(9, Math.floor(23.2488 + 0.242194 * yy - Math.floor(yy / 4)));
+  /* 振替休日：祝日が日曜 → 翌月曜（祝日なら更に翌日） */
+  const snap = [...set];
+  snap.forEach(ds => {
+    if (new Date(ds + "T00:00:00").getDay() === 0) {
+      const sub = new Date(ds + "T00:00:00");
+      sub.setDate(sub.getDate() + 1);
+      while (set.has(dateStr(sub))) sub.setDate(sub.getDate() + 1);
+      set.add(dateStr(sub));
+    }
+  });
+  /* 国民の休日（祝日に挟まれた平日） */
+  const sorted = [...set].sort();
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = new Date(sorted[i] + "T00:00:00");
+    const b2 = new Date(sorted[i + 1] + "T00:00:00");
+    if ((b2 - a) / 86400000 === 2) {
+      const mid = new Date(a); mid.setDate(mid.getDate() + 1);
+      if (mid.getDay() !== 0 && mid.getDay() !== 6) set.add(dateStr(mid));
+    }
+  }
+  return (_holCache[y] = set);
+}
+
+/* ============================================================
    5. 行（タスク・予定）の描画
    ============================================================ */
 
@@ -984,8 +1033,8 @@ function planRow(p) {
   body.addEventListener("click", () => openPlanSheet(p.kind, p.id));
   row.appendChild(body);
 
-  const tick = el("button", "tick" + (isClosedPlan(p) ? " on" : ""), isClosedPlan(p) ? "↩" : "✓");
-  tick.setAttribute("aria-label", "状態を進める");
+  const tick = el("button", "tick", "✓");
+  tick.setAttribute("aria-label", p.kind === "order" ? "購入済みにする" : "完了にする");
   tick.addEventListener("click", e => { e.stopPropagation(); advancePlan(p.id); });
   row.appendChild(tick);
   return row;
@@ -1014,7 +1063,7 @@ function render() {
   m.innerHTML = "";
   [...$("tabbar").children].forEach(b => b.classList.toggle("active", b.dataset.v === view));
   $("todayLabel").textContent = todayStr();
-  if (view === "today") { $("appTitle").firstChild.textContent = "今日"; renderToday(m); }
+  if (view === "today") { $("appTitle").firstChild.textContent = "今週"; renderToday(m); }
   else if (view === "list") { $("appTitle").firstChild.textContent = "一覧"; renderList(m); }
   else if (view === "cal") { $("appTitle").firstChild.textContent = "カレンダー"; renderCal(m); }
   else if (view === "idea") { $("appTitle").firstChild.textContent = "アイデア"; renderIdeas(m); }
@@ -1026,11 +1075,11 @@ function renderToday(m) {
   const soon = dateStr(addDays(new Date(), 7));
   const open = visibleTasks({ showDone: false });
 
-  const overdue = open.filter(t => t.due && t.due < today);
-  const dueToday = open.filter(t => t.due === today);
-  const doing = open.filter(t => t.status === "doing" && !overdue.includes(t) && !dueToday.includes(t));
-  const urgent = open.filter(t => cellOf(t) === "Q1" && !overdue.includes(t) && !dueToday.includes(t) && !doing.includes(t));
-  const waiting = open.filter(t => cellOf(t) === "WAITING");
+  const overdue    = open.filter(t => t.due && t.due < today);
+  const dueToday   = open.filter(t => t.due === today);
+  const dueThisWeek = open.filter(t => t.due && t.due > today && t.due <= soon);
+  const urgent     = open.filter(t => cellOf(t) === "Q1" && !overdue.includes(t) && !dueToday.includes(t) && !dueThisWeek.includes(t));
+  const noDue      = open.filter(t => !t.due && cellOf(t) !== "Q1");
 
   const planSoon = [];
   PLAN_ORDER.forEach(k => plansOf(k, { showDone: false }).forEach(p => {
@@ -1040,20 +1089,20 @@ function renderToday(m) {
     else if (end < today) planSoon.push(p);            /* 納期・帰着を過ぎたまま残っているもの */
   }));
 
-  if (!overdue.length && !dueToday.length && !doing.length && !urgent.length && !planSoon.length) {
+  if (!overdue.length && !dueToday.length && !dueThisWeek.length && !noDue.length && !urgent.length && !planSoon.length) {
     const e = el("div", "empty");
-    e.appendChild(el("div", "lead", tasks.size ? "今日やることはありません" : "ようこそ"));
+    e.appendChild(el("div", "lead", tasks.size ? "今週やることはありません" : "ようこそ"));
     e.appendChild(el("div", null, tasks.size
       ? "右下の＋で追加できます。一覧タブから他のタスクも見られます。"
       : "右下の＋から最初のタスクを追加してください。データはこの端末の中だけに保存されます。"));
     m.appendChild(e);
   }
-  if (overdue.length) m.appendChild(section("⚠️ 期限切れ", "var(--danger)", sortForBoard(overdue).map(t => taskRow(t))));
-  if (dueToday.length) m.appendChild(section("今日が期限", "var(--warn)", sortForBoard(dueToday).map(t => taskRow(t))));
-  if (doing.length) m.appendChild(section("進行中", "var(--q2)", sortForBoard(doing).map(t => taskRow(t))));
-  if (urgent.length) m.appendChild(section("緊急・重要", CELLS.Q1.color, sortForBoard(urgent).map(t => taskRow(t))));
-  if (planSoon.length) m.appendChild(section("📅 近い予定", "var(--order)", planSoon.map(p => planRow(p)), "1週間以内"));
-  if (waiting.length) m.appendChild(section("回答待ち", CELLS.WAITING.color, sortForBoard(waiting).map(t => taskRow(t)), "返事を待っている"));
+  if (overdue.length)     m.appendChild(section("⚠️ 期限切れ",  "var(--danger)", sortForBoard(overdue).map(t => taskRow(t))));
+  if (dueToday.length)    m.appendChild(section("今日が期限",   "var(--warn)",   sortForBoard(dueToday).map(t => taskRow(t))));
+  if (dueThisWeek.length) m.appendChild(section("今週中",       "var(--accent2)", sortForBoard(dueThisWeek).map(t => taskRow(t)), "7日以内"));
+  if (urgent.length)      m.appendChild(section("緊急・重要",   CELLS.Q1.color,  sortForBoard(urgent).map(t => taskRow(t))));
+  if (noDue.length)       m.appendChild(section("期日未設定",   "var(--muted)",  sortForBoard(noDue).map(t => taskRow(t))));
+  if (planSoon.length)    m.appendChild(section("📅 近い予定",  "var(--order)",  planSoon.map(p => planRow(p)), "1週間以内"));
 }
 
 function renderList(m) {
@@ -1135,24 +1184,26 @@ function renderCal(m) {
   m.appendChild(bar);
 
   const grid = el("div", "cal");
-  ["月", "火", "水", "木", "金", "土", "日"].forEach((d, i) => {
-    grid.appendChild(el("div", "dow" + (i === 5 ? " sat" : i === 6 ? " sun" : ""), d));
+  ["日", "月", "火", "水", "木", "金", "土"].forEach((d, i) => {
+    grid.appendChild(el("div", "dow" + (i === 0 ? " sun" : i === 6 ? " sat" : ""), d));
   });
   const first = new Date(y, mo, 1);
   const daysInMonth = new Date(y, mo + 1, 0).getDate();
-  const offset = (first.getDay() + 6) % 7;
+  const offset = first.getDay();
   const cells = Math.ceil((offset + daysInMonth) / 7) * 7;
   const start = addDays(first, -offset);
 
   for (let i = 0; i < cells; i++) {
     const d = addDays(start, i);
     const ds = dateStr(d);
-    const dow = (d.getDay() + 6) % 7;
+    const dow = d.getDay();
+    const hols = getHols(d.getFullYear());
     const b = el("button", "d"
       + (d.getMonth() === mo ? "" : " out")
       + (ds === today ? " today" : "")
       + (ds === calSelected ? " sel" : "")
-      + (dow === 5 ? " sat" : dow === 6 ? " sun" : ""));
+      + (dow === 0 ? " sun" : dow === 6 ? " sat" : "")
+      + (hols.has(ds) ? " hol" : ""));
     b.appendChild(el("span", null, String(d.getDate())));
     const dots = el("span", "dots");
     (byDay.get(ds) || []).slice(0, 4).forEach(it => {
@@ -1183,13 +1234,6 @@ function renderCal(m) {
 }
 
 function renderPlanView(m) {
-  const chips = el("div", "chips");
-  [[false, "未完だけ"], [true, "完了も表示"]].forEach(([v, label]) => {
-    const b = el("button", (!!prefs.showDone === v) ? "active" : "", label);
-    b.addEventListener("click", () => { prefs.showDone = v; savePrefs(); render(); });
-    chips.appendChild(b);
-  });
-  m.appendChild(chips);
 
   PLAN_ORDER.forEach(kind => {
     const meta = PLAN_KINDS[kind];
@@ -1214,11 +1258,9 @@ function renderPlanView(m) {
     sec.appendChild(list);
     m.appendChild(sec);
   });
-  const note = el("div", "muted");
-  note.textContent = shareOn()
-    ? `「完了も表示」で直近1か月の検収済・清算済も出ます。／共有: ${syncStatusText()}`
-    : "「完了も表示」を選ぶと、直近1か月の検収済・清算済も出ます。";
-  m.appendChild(note);
+  if (shareOn()) {
+    m.appendChild(el("div", "muted", `共有: ${syncStatusText()}`));
+  }
   if (shareOn()) {
     const sync = el("button", "w100", "🔄 いま同期する");
     sync.style.marginTop = "10px";
@@ -1246,7 +1288,7 @@ function renderIdeas(m) {
     const e = el("div", "empty");
     e.appendChild(el("div", "lead", "アイデアはまだありません"));
     e.appendChild(el("div", null,
-      "予定にする前の思いつきを、ここに箇条書きで置いておけます。右の → でタスク（着手前）に移せます。"));
+      "予定にする前の思いつきを、ここに箇条書きで置いておけます。→ でタスクに追加、✓ でそのまま完了にできます。"));
     m.appendChild(e);
     return;
   }
@@ -1266,7 +1308,7 @@ function renderIdeas(m) {
     list.appendChild(row);
   });
   m.appendChild(list);
-  m.appendChild(el("div", "muted", `${ideas.length} 件。タップで編集、→ でタスクの「着手前」に移します。`));
+  m.appendChild(el("div", "muted", `${ideas.length} 件。タップで編集。→ タスクに追加 / ✓ そのまま完了`));
 }
 
 function addIdea() {
@@ -1286,13 +1328,22 @@ function ideaToTask(id) {
   const before = snapshot();
   const t = normalizeTask({
     id: newId(), title: ideas[idx].text, importance: "high", urgency: "low",
-    bucket: "idea", status: "todo", createdAt: nowIso(), date: todayStr(),
+    status: "todo", createdAt: nowIso(), date: todayStr(),
   });
-  t.order = nextOrder("IDEA");
+  t.order = nextOrder("Q2");
   tasks.set(t.id, t);
   ideas.splice(idx, 1);
   commit(before, "タスクにする");
-  showToast("タスクの「着手前」に移しました", "取り消す", undo);
+  showToast("タスクに追加しました", "取り消す", undo);
+}
+
+function ideaDone(id) {
+  const idx = ideas.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const before = snapshot();
+  ideas.splice(idx, 1);
+  commit(before, "完了");
+  showToast("完了にしました", "取り消す", undo);
 }
 
 function openIdeaSheet(id) {
@@ -1304,10 +1355,14 @@ function openIdeaSheet(id) {
     ta.value = i.text;
     sheet.appendChild(ta);
 
-    const conv = el("button", "w100", "→ タスク（着手前）にする");
-    conv.style.marginTop = "12px";
+    const g = el("div", "grid2");
+    g.style.marginTop = "12px";
+    const conv = el("button", null, "→ タスクにする");
     conv.addEventListener("click", () => { closeSheet(); ideaToTask(id); });
-    sheet.appendChild(conv);
+    const doneBtn = el("button", null, "✓ このまま完了");
+    doneBtn.addEventListener("click", () => { closeSheet(); ideaDone(id); });
+    g.appendChild(conv); g.appendChild(doneBtn);
+    sheet.appendChild(g);
 
     const acts = el("div", "acts");
     const ok = el("button", "primary", "保存");
@@ -1367,17 +1422,14 @@ function toggleDone(id) {
 function advancePlan(id) {
   const p = plans.get(id);
   if (!p) return;
-  const meta = PLAN_KINDS[p.kind];
-  const i = meta.order.indexOf(p.status);
-  const next = isClosedPlan(p) ? meta.order[0] : meta.order[Math.min(i + 1, meta.order.length - 1)];
+  /* 買い物・出張は ✓ で即削除（取り消し可能） */
+  const labels = { order: "購入済みにしました", trip: "完了にしました" };
   const before = snapshot();
-  p.status = next;
-  p.closedAt = isClosedPlan(p) ? (p.closedAt || nowIso()) : "";
-  stampWho(p, false);
-  p.updatedAt = nowIso();
-  commit(before, "状態変更");
+  plans.delete(id);
+  markGrave("plans", id);
+  commit(before, "完了");
   scheduleSync();
-  showToast(`${meta.statuses[next].name} にしました`, "取り消す", undo);
+  showToast(labels[p.kind] || "完了にしました", "取り消す", undo);
 }
 
 /* ============================================================
@@ -1593,19 +1645,21 @@ function openPlanSheet(kind, id) {
     title.placeholder = kind === "order" ? "例: 測定治具一式" : "例: 名古屋（○○製作所）";
     sheet.appendChild(title);
 
-    sheet.appendChild(el("label", null, "状態"));
-    const seg = el("div", "seg");
-    meta.order.forEach(s => {
-      const b = el("button", status === s ? "on" : "", meta.statuses[s].name);
-      b.type = "button";
-      b.addEventListener("click", () => {
-        status = s;
-        [...seg.children].forEach(x => x.classList.remove("on"));
-        b.classList.add("on");
+    if (kind !== "order") {
+      sheet.appendChild(el("label", null, "状態"));
+      const seg = el("div", "seg");
+      meta.order.forEach(s => {
+        const b = el("button", status === s ? "on" : "", meta.statuses[s].name);
+        b.type = "button";
+        b.addEventListener("click", () => {
+          status = s;
+          [...seg.children].forEach(x => x.classList.remove("on"));
+          b.classList.add("on");
+        });
+        seg.appendChild(b);
       });
-      seg.appendChild(b);
-    });
-    sheet.appendChild(seg);
+      sheet.appendChild(seg);
+    }
 
     sheet.appendChild(el("label", null, meta.partnerLabel));
     const partner = el("input");
@@ -1923,6 +1977,9 @@ function loadData() {
 /* 見えている高さぴったりに画面を合わせる（下に余白が出ないようにする）。
    まだ測れないときはCSS側（100dvh）に任せる */
 function fitHeight() {
+  /* キーボードが出ているあいだは高さを変えない（入力欄タップ時にレイアウトが跳ねるのを防ぐ） */
+  const active = document.activeElement;
+  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
   const h = window.innerHeight || document.documentElement.clientHeight || 0;
   if (h < 200) { document.body.classList.remove("fit"); return; }
   document.documentElement.style.setProperty("--app-h", h + "px");
