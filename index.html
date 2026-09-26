@@ -122,10 +122,10 @@
     background: rgba(14,17,23,.95); backdrop-filter: blur(10px);
     border-top: 1px solid var(--border);
   }
-  /* ホーム画面から開いたときだけ、ホームバーとノッチの領域を避ける。
-     Safariのタブから開いたときはブラウザ側のバーがあるので余白を足さない */
+  /* ホーム画面から開いたときだけ、ノッチ領域を避ける */
   body.standalone .appbar { padding-top: calc(var(--safe-t) + 10px); }
-  body.standalone .tabbar { padding-bottom: var(--safe-b); }
+  /* タブバーはホームバー領域を常に避ける（viewport-fit=coverのため両モードで必要） */
+  .tabbar { padding-bottom: env(safe-area-inset-bottom, 0px); }
   .tabbar button {
     background: none; border: none; border-radius: 0; color: var(--muted);
     height: var(--bar); font-size: 11px; display: flex; flex-direction: column;
@@ -1975,12 +1975,15 @@ function loadData() {
 }
 
 /* 見えている高さぴったりに画面を合わせる（下に余白が出ないようにする）。
+   visualViewport が使えればそちらを優先（iOS Safariで最も正確）。
    まだ測れないときはCSS側（100dvh）に任せる */
 function fitHeight() {
   /* キーボードが出ているあいだは高さを変えない（入力欄タップ時にレイアウトが跳ねるのを防ぐ） */
   const active = document.activeElement;
   if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
-  const h = window.innerHeight || document.documentElement.clientHeight || 0;
+  const h = (window.visualViewport && window.visualViewport.height > 0)
+    ? window.visualViewport.height
+    : (window.innerHeight || document.documentElement.clientHeight || 0);
   if (h < 200) { document.body.classList.remove("fit"); return; }
   document.documentElement.style.setProperty("--app-h", h + "px");
   document.body.classList.add("fit");
@@ -1992,7 +1995,10 @@ function init() {
   }
   fitHeight();
   window.addEventListener("resize", fitHeight);
-  window.addEventListener("orientationchange", () => setTimeout(fitHeight, 250));
+  window.addEventListener("orientationchange", () => setTimeout(fitHeight, 400));
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", fitHeight);
+  }
   loadPrefs();
   loadData();
   loadShare();
