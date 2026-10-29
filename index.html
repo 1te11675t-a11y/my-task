@@ -969,15 +969,17 @@ function addFromCand(c, edit) {
     made = { kind: c.kind, id: p.id };
     scheduleSync();          /* 予定は共有の対象 */
   } else {
-    const cell = CELLS[c.cell] && CELL_ORDER.includes(c.cell) ? c.cell : "Q2";
+    const cell = "Q2";
     const t = normalizeTask({
       id: newId(), title: c.title, note: candNote(c), status: "todo", due: c.due,
       createdAt: nowIso(), date: todayStr(),
     });
     applyCell(t, cell);
     t.order = nextOrder(cell);
-    t.shared = false;        /* まずは自分だけ。共有するなら編集画面で切り替える */
+    t.shared = shareOn();    /* 候補は家族と共有が既定。自分だけにするなら編集画面で切り替える */
+    stampWho(t, true);
     tasks.set(t.id, t);
+    if (t.shared) scheduleSync();
     made = { kind: "task", id: t.id };
   }
   queueCandDecision(c.id, "added", made.id);
@@ -996,12 +998,44 @@ function rejectCand(c) {
   showToast("却下しました", "取り消す", () => { unqueueCand(c.id); render(); });
 }
 
+/* すでに入っていそうなもの（自分だけのタスクも含めて端末の中で照合）。
+   名前が似ている、または同じ日付で名前に共通部分があるもの */
+function bigrams(s) {
+  const t = String(s || "").toLowerCase().replace(/[\s　・、。()（）「」【】\-]/g, "");
+  const set = new Set();
+  for (let i = 0; i < t.length - 1; i++) set.add(t.slice(i, i + 2));
+  if (t.length === 1) set.add(t);
+  return set;
+}
+function similarity(a, b) {
+  const A = bigrams(a), B = bigrams(b);
+  if (!A.size || !B.size) return 0;
+  let n = 0;
+  A.forEach(x => { if (B.has(x)) n++; });
+  return n / Math.min(A.size, B.size);
+}
+function candDupes(c) {
+  const due = toDay(c.due), end = toDay(c.endDate) || due;
+  const hits = [];
+  const check = (title, from, to, label) => {
+    const sim = similarity(c.title, title);
+    const sameDay = due && from && from <= end && (to || from) >= due;
+    if (sim >= 0.6 || (sameDay && sim >= 0.25)) hits.push(label);
+  };
+  visibleTasks({ showDone: false }).forEach(t => check(t.title, t.due, t.due, t.title));
+  PLAN_ORDER.forEach(k => plansOf(k, { showDone: false }).forEach(p => {
+    check(p.title + " " + p.partner, p.date, p.endDate, `${PLAN_KINDS[p.kind].icon} ${p.title}`);
+  }));
+  return hits;
+}
+
 function candRow(c) {
   const box = el("div", "cand");
   box.appendChild(el("div", "ttl", c.title));
   const meta = el("div", "meta");
+  const dupes = candDupes(c);
+  if (dupes.length) meta.appendChild(el("span", "badge due-soon", "⚠ 登録済みかも: " + dupes.slice(0, 2).join("、")));
   meta.appendChild(el("span", "badge", CAND_KIND_LABEL[c.kind] || "タスク"));
-  if ((!c.kind || c.kind === "task") && CELLS[c.cell]) meta.appendChild(el("span", "badge cell", CELLS[c.cell].short));
   const due = toDay(c.due);
   if (due) {
     const lbl = c.kind === "order" ? "購入 " : c.kind === "trip" ? "出発 " : "期限 ";
@@ -1166,15 +1200,20 @@ function dueBadge(t) {
   return { cls: "", text: "期限 " + md(t.due) };
 }
 
+/* モバイル版は緊急度・重要度の区分を見せない（データには残し、PC版とは互換のまま） */
+const TASK_COLOR = "var(--accent2)";
+function taskColor(t) {
+  const st = dueState(t);
+  return st === "over" ? "var(--danger)" : st === "today" ? "var(--warn)" : TASK_COLOR;
+}
+
 function taskRow(t, opts) {
-  const cell = cellOf(t);
   const row = el("div", "row" + (t.status === "done" ? " done" : ""));
-  row.style.setProperty("--row-color", CELLS[cell].color);
+  row.style.setProperty("--row-color", taskColor(t));
 
   const body = el("button", "body");
   body.appendChild(el("div", "ttl", t.title || "(無題)"));
   const meta = el("div", "meta");
-  if (!opts || opts.showCell !== false) meta.appendChild(el("span", "badge cell", CELLS[cell].short));
   if (t.status !== "todo") meta.appendChild(el("span", "badge st-" + t.status, STATUSES[t.status].name));
   const db = dueBadge(t);
   if (db) meta.appendChild(el("span", "badge " + db.cls, db.text));
@@ -1268,13 +1307,8 @@ function renderToday(m) {
   const overdue    = open.filter(t => t.due && t.due < today);
   const dueToday   = open.filter(t => t.due === today);
   const dueThisWeek = open.filter(t => t.due && t.due > today && t.due <= soon);
-  const urgent     = open.filter(t => cellOf(t) === "Q1" && !overdue.includes(t) && !dueToday.includes(t) && !dueThisWeek.includes(t));
-  const noDue      = open.filter(t => !t.due && cellOf(t) !== "Q1");
-
-  const mailCands = candsOn() ? pendingCands() : [];
-  if (mailCands.length) {
-    m.appendChild(section("📥 メールからの候補", "var(--accent2)", mailCands.map(candRow), "承認したものだけ追加"));
-  }
+  const noDue      = open.filter(t => !t.due);
+  const mailCands  = candsOn() ? pendingCands() : [];
 
   const planSoon = [];
   PLAN_ORDER.forEach(k => plansOf(k, { showDone: false }).forEach(p => {
@@ -1284,7 +1318,7 @@ function renderToday(m) {
     else if (end < today) planSoon.push(p);            /* 納期・帰着を過ぎたまま残っているもの */
   }));
 
-  if (!mailCands.length && !overdue.length && !dueToday.length && !dueThisWeek.length && !noDue.length && !urgent.length && !planSoon.length) {
+  if (!mailCands.length && !overdue.length && !dueToday.length && !dueThisWeek.length && !noDue.length && !planSoon.length) {
     const e = el("div", "empty");
     e.appendChild(el("div", "lead", tasks.size ? "今週やることはありません" : "ようこそ"));
     e.appendChild(el("div", null, tasks.size
@@ -1295,9 +1329,10 @@ function renderToday(m) {
   if (overdue.length)     m.appendChild(section("⚠️ 期限切れ",  "var(--danger)", sortForBoard(overdue).map(t => taskRow(t))));
   if (dueToday.length)    m.appendChild(section("今日が期限",   "var(--warn)",   sortForBoard(dueToday).map(t => taskRow(t))));
   if (dueThisWeek.length) m.appendChild(section("今週中",       "var(--accent2)", sortForBoard(dueThisWeek).map(t => taskRow(t)), "7日以内"));
-  if (urgent.length)      m.appendChild(section("緊急・重要",   CELLS.Q1.color,  sortForBoard(urgent).map(t => taskRow(t))));
   if (noDue.length)       m.appendChild(section("期日未設定",   "var(--muted)",  sortForBoard(noDue).map(t => taskRow(t))));
   if (planSoon.length)    m.appendChild(section("📅 近い予定",  "var(--order)",  planSoon.map(p => planRow(p)), "1週間以内"));
+  /* 候補は直近の予定を隠さないよう一番下に */
+  if (mailCands.length)   m.appendChild(section("📥 メールからの候補", "var(--accent2)", mailCands.map(candRow), "承認したものだけ追加"));
 }
 
 function renderList(m) {
@@ -1327,12 +1362,10 @@ function renderList(m) {
     m.appendChild(e);
     return;
   }
-  CELL_ORDER.forEach(cell => {
-    const items = sortForBoard(list.filter(t => cellOf(t) === cell));
-    if (!items.length) return;
-    m.appendChild(section(CELLS[cell].name, CELLS[cell].color,
-      items.map(t => taskRow(t, { showCell: false })), CELLS[cell].hint));
-  });
+  const withDue = sortForBoard(list.filter(t => t.due));
+  const noDue = sortForBoard(list.filter(t => !t.due));
+  if (withDue.length) m.appendChild(section("期限あり", TASK_COLOR, withDue.map(t => taskRow(t)), "期限の早い順"));
+  if (noDue.length) m.appendChild(section("期限なし", "var(--muted)", noDue.map(t => taskRow(t))));
 }
 
 function calRef() {
@@ -1403,7 +1436,7 @@ function renderCal(m) {
     const dots = el("span", "dots");
     (byDay.get(ds) || []).slice(0, 4).forEach(it => {
       const dot = el("i");
-      dot.style.background = it.kind === "task" ? CELLS[cellOf(it.t)].color : PLAN_KINDS[it.p.kind].color;
+      dot.style.background = it.kind === "task" ? TASK_COLOR : PLAN_KINDS[it.p.kind].color;
       dots.appendChild(dot);
     });
     b.appendChild(dots);
@@ -1699,23 +1732,6 @@ function openTaskSheet(id) {
     title.placeholder = "例: 見積回答の取りまとめ";
     title.autocomplete = "off";
     sheet.appendChild(title);
-
-    sheet.appendChild(el("label", null, "置き場所"));
-    const pick = el("div", "pick");
-    CELL_ORDER.forEach(c => {
-      const b = el("button", cell === c ? "on" : "");
-      b.type = "button";
-      b.style.setProperty("--pick-color", CELLS[c].color);
-      b.appendChild(el("span", null, CELLS[c].name));
-      b.appendChild(el("span", "s", CELLS[c].hint));
-      b.addEventListener("click", () => {
-        cell = c;
-        [...pick.children].forEach(x => x.classList.remove("on"));
-        b.classList.add("on");
-      });
-      pick.appendChild(b);
-    });
-    sheet.appendChild(pick);
 
     sheet.appendChild(el("label", null, "状態"));
     const seg = el("div", "seg");
