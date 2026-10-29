@@ -187,6 +187,19 @@
   .badge.shared { color: #e3c6f5; border-color: var(--order); }
   .badge.cell { color: var(--muted); }
 
+  /* ── メールからの候補 ── */
+  .cand {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 4px solid var(--accent2); border-radius: 12px; padding: 11px 12px 10px;
+  }
+  .cand .ttl { font-weight: 600; word-break: break-word; }
+  .cand .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .cand .why { font-size: 13px; margin-top: 6px; word-break: break-word; }
+  .cand .src { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-word; }
+  .cand .src a { color: var(--accent2); }
+  .cand .btns { display: flex; gap: 7px; margin-top: 9px; }
+  .cand .btns button { flex: 1; padding: 10px 6px; font-size: 14px; }
+
   .empty {
     background: var(--panel); border: 1px dashed var(--border); border-radius: 12px;
     padding: 22px 16px; text-align: center; color: var(--muted); font-size: 13px;
@@ -325,6 +338,7 @@ const LS_PREFS = "private_task_prefs";
 const LS_BACKUP = "private_task_last_backup";
 const LS_SHARE = "private_task_share";      /* 共有の接続先（この端末だけに保存） */
 const LS_GRAVES = "private_task_graves";    /* 消した予定の記録（復活を防ぐ） */
+const LS_CANDS = "private_task_mail_cands"; /* メールからの候補と、まだ送れていない承認・却下 */
 const SYNC_INTERVAL = 60000;
 const UNDO_LIMIT = 20;
 
@@ -374,7 +388,10 @@ let tasks = new Map();
 let plans = new Map();
 let ideas = [];                 /* 予定に入れる前の思いつき（ただの箇条書き） */
 let graves = { plans: [], tasks: [] };   /* 消したものの { id, deletedAt } */
-let share = { url: "", token: "", name: "", lastSync: "", lastError: "" };
+let share = { url: "", token: "", owner: "", name: "", lastSync: "", lastError: "" };
+let cands = { list: [], queue: [], lastFetch: "", lastError: "" };   /* メールからの候補 */
+let candFetching = false;
+let candFlushTimer = null;
 let syncing = false;
 let syncTimer = null;
 let syncPending = null;
@@ -853,11 +870,173 @@ function startSyncTimer() {
   syncTimer = setInterval(() => { if (!document.hidden) syncShared(false); }, SYNC_INTERVAL);
 }
 
+/* ============================================================
+   4.6 メールからの候補
+   ------------------------------------------------------------
+   毎朝 Gmail を読むエージェントが、GAS の候補シートに置いていく。
+   自分専用の合言葉がある端末だけが読み、承認したものだけをタスク・予定にする。
+   ============================================================ */
+
+function candsOn() { return !!(share.url && share.owner); }
+function loadCands() {
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_CANDS) || "{}");
+    if (o && typeof o === "object") {
+      cands.list = Array.isArray(o.list) ? o.list : [];
+      cands.queue = Array.isArray(o.queue) ? o.queue : [];
+      cands.lastFetch = o.lastFetch || "";
+    }
+  } catch (e) { /* 既定のまま */ }
+}
+function saveCands() {
+  try { localStorage.setItem(LS_CANDS, JSON.stringify(cands)); } catch (e) { /* 続行 */ }
+}
+/* 決めたのにまだ送れていないものは、画面に出さない */
+function pendingCands() {
+  const decided = new Set(cands.queue.map(d => d.id));
+  return cands.list.filter(c => !decided.has(c.id));
+}
+
+async function candPost(body) {
+  const res = await fetch(share.url, {
+    method: "POST", body: JSON.stringify(Object.assign({ token: share.owner }, body)), redirect: "follow",
+  });
+  const data = await res.json();
+  if (!data || !data.ok) throw new Error((data && data.error) || "サーバーが受け付けませんでした");
+  return data;
+}
+
+/* 送れていない承認・却下を送ってから、未決の候補を受け取る */
+async function fetchCands(manual) {
+  if (!candsOn()) return;
+  if (candFetching) return;
+  candFetching = true;
+  try {
+    const sending = cands.queue.slice();
+    const data = sending.length
+      ? await candPost({ action: "decide", decisions: sending })
+      : await candPost({ action: "candidates" });
+    const sent = new Set(sending.map(d => d.id));
+    cands.queue = cands.queue.filter(d => !sent.has(d.id));
+    cands.list = (data.candidates || []).filter(c => c && c.id && c.title);
+    cands.lastFetch = nowIso();
+    cands.lastError = "";
+    saveCands();
+    if (manual) showToast(`メールの候補 ${pendingCands().length} 件`);
+  } catch (err) {
+    cands.lastError = String(err.message || err).slice(0, 40);
+    if (manual) showToast("候補を読めませんでした: " + cands.lastError);
+  } finally {
+    candFetching = false;
+    if (view === "today" && !sheetOpen) render();
+  }
+}
+
+/* 押してすぐは送らない（直後の「取り消す」を効かせるため） */
+function queueCandDecision(id, decision, resultId) {
+  cands.queue = cands.queue.filter(d => d.id !== id);
+  cands.queue.push({ id: id, decision: decision, resultId: resultId || "" });
+  saveCands();
+  clearTimeout(candFlushTimer);
+  candFlushTimer = setTimeout(() => fetchCands(false), 6000);
+}
+function unqueueCand(id) {
+  cands.queue = cands.queue.filter(d => d.id !== id);
+  saveCands();
+}
+
+const CAND_KIND_LABEL = { task: "タスク", order: "🛒 買い物", trip: "✈ 出張" };
+
+function candNote(c) {
+  const lines = [];
+  if (c.note) lines.push(c.note);
+  const src = [c.mailSubject && `「${c.mailSubject}」`, c.mailFrom].filter(Boolean).join(" / ");
+  if (src) lines.push("メール: " + src);
+  return lines.join("\n");
+}
+
+/* 候補からタスク・予定を作る。edit=true ならそのまま編集画面を開く */
+function addFromCand(c, edit) {
+  const before = snapshot();
+  let made;
+  if (c.kind === "order" || c.kind === "trip") {
+    const p = normalizePlan({
+      id: newId(), kind: c.kind, title: c.title, partner: c.partner, purpose: c.purpose,
+      amount: c.amount, date: c.due, endDate: c.kind === "trip" ? c.endDate : "", note: candNote(c),
+    });
+    stampWho(p, true);
+    plans.set(p.id, p);
+    made = { kind: c.kind, id: p.id };
+    scheduleSync();          /* 予定は共有の対象 */
+  } else {
+    const cell = CELLS[c.cell] && CELL_ORDER.includes(c.cell) ? c.cell : "Q2";
+    const t = normalizeTask({
+      id: newId(), title: c.title, note: candNote(c), status: "todo", due: c.due,
+      createdAt: nowIso(), date: todayStr(),
+    });
+    applyCell(t, cell);
+    t.order = nextOrder(cell);
+    t.shared = false;        /* まずは自分だけ。共有するなら編集画面で切り替える */
+    tasks.set(t.id, t);
+    made = { kind: "task", id: t.id };
+  }
+  queueCandDecision(c.id, "added", made.id);
+  commit(before, "候補から追加");
+  if (edit) {
+    if (made.kind === "task") openTaskSheet(made.id);
+    else openPlanSheet(made.kind, made.id);
+  } else {
+    showToast("追加しました", "取り消す", () => { unqueueCand(c.id); undo(); });
+  }
+}
+
+function rejectCand(c) {
+  queueCandDecision(c.id, "rejected");
+  render();
+  showToast("却下しました", "取り消す", () => { unqueueCand(c.id); render(); });
+}
+
+function candRow(c) {
+  const box = el("div", "cand");
+  box.appendChild(el("div", "ttl", c.title));
+  const meta = el("div", "meta");
+  meta.appendChild(el("span", "badge", CAND_KIND_LABEL[c.kind] || "タスク"));
+  if ((!c.kind || c.kind === "task") && CELLS[c.cell]) meta.appendChild(el("span", "badge cell", CELLS[c.cell].short));
+  const due = toDay(c.due);
+  if (due) {
+    const lbl = c.kind === "order" ? "購入 " : c.kind === "trip" ? "出発 " : "期限 ";
+    meta.appendChild(el("span", "badge" + (due < todayStr() ? " due-over" : due === todayStr() ? " due-today" : ""), lbl + md(due)));
+  }
+  if (c.amount) meta.appendChild(el("span", "badge", c.amount));
+  box.appendChild(meta);
+  if (c.reason) box.appendChild(el("div", "why", c.reason));
+  const src = el("div", "src");
+  src.appendChild(document.createTextNode("✉ " + [c.mailSubject, c.mailFrom].filter(Boolean).join(" / ")));
+  if (/^https:\/\/mail\.google\.com\//.test(c.mailUrl || "")) {
+    src.appendChild(document.createTextNode("　"));
+    const a = el("a", null, "メールを開く");
+    a.href = c.mailUrl; a.target = "_blank"; a.rel = "noopener";
+    src.appendChild(a);
+  }
+  box.appendChild(src);
+
+  const btns = el("div", "btns");
+  const add = el("button", "primary", "追加");
+  add.addEventListener("click", () => addFromCand(c, false));
+  const edit = el("button", null, "直して追加");
+  edit.addEventListener("click", () => addFromCand(c, true));
+  const no = el("button", null, "却下");
+  no.addEventListener("click", () => rejectCand(c));
+  btns.appendChild(add); btns.appendChild(edit); btns.appendChild(no);
+  box.appendChild(btns);
+  return box;
+}
+
 function openShareSheet() {
   openSheet(sheet => {
     sheet.appendChild(el("h2", null, "共有の設定"));
     sheet.appendChild(el("div", "muted",
-      "発注・出張の予定だけを、2人のiPhoneで共有します。タスクとアイデアは共有されません。"));
+      "予定（買い物・出張）と、🤝共有を付けたタスクだけを2人のiPhoneで共有します。自分だけのタスクとアイデアは送りません。"));
 
     sheet.appendChild(el("label", null, "接続先URL（…/exec で終わるもの）"));
     const url = el("input");
@@ -876,6 +1055,14 @@ function openShareSheet() {
     name.autocomplete = "off";
     sheet.appendChild(name);
 
+    sheet.appendChild(el("label", null, "メール候補の合言葉（自分の端末だけ・任意）"));
+    const owner = el("input");
+    owner.type = "text"; owner.value = share.owner || ""; owner.autocomplete = "off"; owner.spellcheck = false;
+    owner.placeholder = "空欄なら候補は出ません";
+    sheet.appendChild(owner);
+    sheet.appendChild(el("div", "muted",
+      "Gmailから毎朝作られる「タスクの候補」を、今日タブに出します。家族の端末には入れないでください。"));
+
     const st = el("div", "card");
     st.style.marginTop = "14px";
     st.appendChild(el("h3", null, "状態"));
@@ -888,11 +1075,14 @@ function openShareSheet() {
       share.url = url.value.trim();
       share.token = token.value.trim();
       share.name = name.value.trim().slice(0, 12);
+      share.owner = owner.value.trim();
       share.lastError = "";
+      if (!share.owner) { cands.list = []; saveCands(); }
       saveShare();
       closeSheet();
       startSyncTimer();
       await syncShared(true);
+      if (candsOn()) fetchCands(true);
     });
     const cancel = el("button", null, "閉じる");
     cancel.addEventListener("click", closeSheet);
@@ -1081,6 +1271,11 @@ function renderToday(m) {
   const urgent     = open.filter(t => cellOf(t) === "Q1" && !overdue.includes(t) && !dueToday.includes(t) && !dueThisWeek.includes(t));
   const noDue      = open.filter(t => !t.due && cellOf(t) !== "Q1");
 
+  const mailCands = candsOn() ? pendingCands() : [];
+  if (mailCands.length) {
+    m.appendChild(section("📥 メールからの候補", "var(--accent2)", mailCands.map(candRow), "承認したものだけ追加"));
+  }
+
   const planSoon = [];
   PLAN_ORDER.forEach(k => plansOf(k, { showDone: false }).forEach(p => {
     if (!p.date) return;
@@ -1089,7 +1284,7 @@ function renderToday(m) {
     else if (end < today) planSoon.push(p);            /* 納期・帰着を過ぎたまま残っているもの */
   }));
 
-  if (!overdue.length && !dueToday.length && !dueThisWeek.length && !noDue.length && !urgent.length && !planSoon.length) {
+  if (!mailCands.length && !overdue.length && !dueToday.length && !dueThisWeek.length && !noDue.length && !urgent.length && !planSoon.length) {
     const e = el("div", "empty");
     e.appendChild(el("div", "lead", tasks.size ? "今週やることはありません" : "ようこそ"));
     e.appendChild(el("div", null, tasks.size
@@ -2002,6 +2197,7 @@ function init() {
   loadPrefs();
   loadData();
   loadShare();
+  loadCands();
   applySimpleMode();
   $("todayLabel").textContent = todayStr();
 
@@ -2043,10 +2239,12 @@ function init() {
     fitHeight();
     render();
     syncShared(false);        /* 相手の変更を拾う */
+    fetchCands(false);        /* 朝に届いた候補を拾う */
   });
 
   render();
   if (shareOn()) { syncShared(false); startSyncTimer(); }
+  fetchCands(false);
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
