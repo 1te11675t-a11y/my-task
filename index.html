@@ -233,6 +233,7 @@
   .cal .d.sat > span:first-child { color: #8ab4ff; }
   .cal .d.hol > span:first-child { color: var(--accent); }
   .daylist-head { font-size: 13px; color: var(--muted); margin: 0 2px 7px; }
+  .agenda-empty { padding: 4px 4px 2px; }
 
   /* ── シート（下から出るモーダル） ── */
   .backdrop {
@@ -509,6 +510,7 @@ function normalizeTask(raw) {
     note: String(t.note != null ? t.note : (t.reason || "")),
     importance: imp, urgency: urg, status: status,
     due: toDay(t.due),
+    dueTime: toDay(t.due) ? toTime(t.dueTime) : "",
     tags: Array.isArray(t.tags)
       ? t.tags.map(x => String(x)).filter(Boolean)
       : String(t.tags == null ? "" : t.tags).split(/[\s,、]+/).filter(Boolean),
@@ -525,10 +527,18 @@ function normalizeTask(raw) {
     shared: (t.shared === true || t.shared === "true"),
   };
 }
+/* 時刻は "HH:MM"。表計算が "9:05" や "09:05:00" にしても拾う */
+function toTime(v) {
+  const m = String(v == null ? "" : v).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return "";
+  const h = Number(m[1]), mi = Number(m[2]);
+  if (h > 23 || mi > 59) return "";
+  return `${pad2(h)}:${pad2(mi)}`;
+}
 function taskObj(t) {
   return {
     id: t.id, date: t.date, title: t.title, quadrant: CELLS[cellOf(t)].legacy, order: t.order,
-    reason: t.note, due: t.due, result: t.result, done: t.status === "done",
+    reason: t.note, due: t.due, dueTime: t.dueTime, result: t.result, done: t.status === "done",
     carried_from: t.carriedFrom == null ? null : t.carriedFrom,
     completed_at: legacyFromIso(t.completedAt),
     note: t.note, importance: t.importance, urgency: t.urgency, status: t.status,
@@ -541,7 +551,7 @@ function taskObj(t) {
 function taskToWire(t) {
   return {
     id: t.id, title: t.title, note: t.note, importance: t.importance, urgency: t.urgency,
-    status: t.status, due: t.due, tags: (t.tags || []).join(" "), bucket: t.bucket,
+    status: t.status, due: t.due, dueTime: t.dueTime, tags: (t.tags || []).join(" "), bucket: t.bucket,
     order: t.order, result: t.result, completedAt: t.completedAt, date: t.date,
     createdBy: t.createdBy, updatedBy: t.updatedBy,
     createdAt: t.createdAt, updatedAt: t.updatedAt,
@@ -667,12 +677,19 @@ function plansOf(kind, opts) {
     return String(a.createdAt).localeCompare(String(b.createdAt));
   });
 }
+/* 同じ日の中では時刻ありを時刻順に先、時刻なしは後 */
+function timeCmp(a, b) {
+  if (!!a !== !!b) return a ? -1 : 1;
+  return (a && b) ? a.localeCompare(b) : 0;
+}
 /* 日付の入っていないものが先。そのあとを期限の early → late で並べる */
 function sortForBoard(list) {
   return list.slice().sort((a, b) => {
     const ad = a.due ? 1 : 0, bd = b.due ? 1 : 0;
     if (ad !== bd) return ad - bd;
     if (a.due && b.due && a.due !== b.due) return a.due.localeCompare(b.due);
+    const c = timeCmp(a.dueTime, b.dueTime);
+    if (c) return c;
     return (a.order - b.order) || String(a.createdAt).localeCompare(String(b.createdAt));
   });
 }
@@ -851,6 +868,8 @@ function mergeSharedTasks(remote) {
     const t = normalizeTask(Object.assign({}, o, { shared: true }));
     seen.add(t.id);
     const cur = tasks.get(t.id);
+    /* 時刻の列が無い古いGASから戻ってきたときは、手元の時刻を消さない */
+    if (cur && !("dueTime" in o) && t.due === cur.due) t.dueTime = cur.dueTime;
     if (!cur || String(t.updatedAt) >= String(cur.updatedAt)) tasks.set(t.id, t);
   });
   /* 相手が消した共有タスクは、こちらからも消す（共有していないものは残す） */
@@ -1194,10 +1213,11 @@ function getHols(y) {
 function dueBadge(t) {
   if (!t.due) return null;
   const st = dueState(t);
-  if (st === "over") return { cls: "due-over", text: "期限切れ " + md(t.due) };
-  if (st === "today") return { cls: "due-today", text: "今日 " + md(t.due) };
-  if (st === "soon") return { cls: "due-soon", text: "明日 " + md(t.due) };
-  return { cls: "", text: "期限 " + md(t.due) };
+  const tm = t.dueTime ? " " + t.dueTime : "";
+  if (st === "over") return { cls: "due-over", text: "期限切れ " + md(t.due) + tm };
+  if (st === "today") return { cls: "due-today", text: "今日 " + md(t.due) + tm };
+  if (st === "soon") return { cls: "due-soon", text: "明日 " + md(t.due) + tm };
+  return { cls: "", text: "期限 " + md(t.due) + tm };
 }
 
 /* モバイル版は緊急度・重要度の区分を見せない（データには残し、PC版とは互換のまま） */
@@ -1386,6 +1406,30 @@ function calEntriesByDay() {
   return byDay;
 }
 
+/* 1日分の一覧。時刻つきタスク（時刻順）→ 予定 → 時刻なしタスク */
+function dayAgenda(ds, label, byDay, color) {
+  const sd = parseDay(ds);
+  const wd = ["日", "月", "火", "水", "木", "金", "土"][sd.getDay()];
+  const dayText = `${sd.getMonth() + 1}月${sd.getDate()}日（${wd}）`;
+  const items = (byDay.get(ds) || []).slice();
+  const rank = it => it.kind === "task" ? (it.t.dueTime ? 0 : 2) : 1;
+  items.sort((a, b) => {
+    const r = rank(a) - rank(b);
+    if (r) return r;
+    if (a.kind === "task" && b.kind === "task") {
+      const da = a.t.status === "done" ? 1 : 0, db = b.t.status === "done" ? 1 : 0;
+      if (da !== db) return da - db;
+      return timeCmp(a.t.dueTime, b.t.dueTime) || (a.t.order - b.t.order);
+    }
+    return 0;
+  });
+  const sec = section(label ? `${label}　${dayText}` : dayText, color,
+    items.map(it => it.kind === "task" ? taskRow(it.t) : planRow(it.p)));
+  sec.classList.add("agenda");
+  if (!items.length) sec.appendChild(el("div", "muted agenda-empty", "予定はありません"));
+  return sec;
+}
+
 function renderCal(m) {
   const ref = calRef();
   const y = ref.getFullYear(), mo = ref.getMonth();
@@ -1445,20 +1489,14 @@ function renderCal(m) {
   }
   m.appendChild(grid);
 
-  const items = byDay.get(calSelected) || [];
-  const sd = parseDay(calSelected);
-  const wd = ["日", "月", "火", "水", "木", "金", "土"][sd.getDay()];
-  m.appendChild(el("div", "daylist-head", `${sd.getMonth() + 1}月${sd.getDate()}日（${wd}）`));
-  if (!items.length) {
-    const e = el("div", "empty");
-    e.appendChild(el("div", null, "この日に日付が入っているものはありません"));
-    m.appendChild(e);
-  } else {
-    const list = el("div", "list");
-    items.forEach(it => list.appendChild(it.kind === "task" ? taskRow(it.t) : planRow(it.p)));
-    m.appendChild(list);
+  /* カレンダーの下: 選んだ日（今日・明日以外のとき）→ 今日 → 明日 */
+  const tomorrow = dateStr(addDays(new Date(), 1));
+  if (calSelected !== today && calSelected !== tomorrow) {
+    m.appendChild(dayAgenda(calSelected, "", byDay, "var(--muted)"));
   }
-  m.appendChild(el("div", "muted", "期限（タスク）・納期（発注）・期間（出張）が入っているものだけ出ます。"));
+  m.appendChild(dayAgenda(today, "今日の予定", byDay, "var(--warn)"));
+  m.appendChild(dayAgenda(tomorrow, "明日の予定", byDay, "var(--accent2)"));
+  m.appendChild(el("div", "muted", "期限（タスク）・納期（買い物）・期間（出張）が入っているものだけ出ます。時刻つきのタスクが時刻順で先に並びます。"));
 }
 
 function renderPlanView(m) {
@@ -1712,6 +1750,30 @@ function dateField(id, value) {
   return wrap;
 }
 
+function timeField(id, value) {
+  const wrap = el("div");
+  const input = el("input");
+  input.type = "time";
+  input.id = id;
+  input.step = 300;
+  input.value = value || "";
+  wrap.appendChild(input);
+  const q = el("div", "quick");
+  [["09:00", "9:00"], ["12:00", "12:00"], ["15:00", "15:00"], ["19:00", "19:00"], ["", "時刻なし"]].forEach(([v, label]) => {
+    const b = el("button", null, label);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      input.value = v;
+      /* 時刻だけ押して日付が空なら、今日を入れておく */
+      const due = $("sDue");
+      if (v && due && !due.value) due.value = todayStr();
+    });
+    q.appendChild(b);
+  });
+  wrap.appendChild(q);
+  return wrap;
+}
+
 function openTaskSheet(id) {
   const existing = id ? tasks.get(id) : null;
   if (id && !existing) return;
@@ -1750,6 +1812,9 @@ function openTaskSheet(id) {
 
     sheet.appendChild(el("label", null, "期限"));
     sheet.appendChild(dateField("sDue", t.due));
+
+    sheet.appendChild(el("label", null, "時刻（任意）"));
+    sheet.appendChild(timeField("sTime", t.dueTime));
 
     sheet.appendChild(el("label", null, "メモ"));
     const note = el("textarea");
@@ -1795,6 +1860,8 @@ function openTaskSheet(id) {
       after.note = note.value.trim();
       after.tags = tags.value.split(/[\s,、]+/).map(s => s.trim()).filter(Boolean);
       after.due = $("sDue").value || "";
+      after.dueTime = toTime($("sTime").value);
+      if (after.dueTime && !after.due) { showToast("時刻を入れるときは期限の日付も入れてください"); return; }
       applyCell(after, cell);
       after.status = status;
       if (status === "done") after.result = result.value.trim();
@@ -1815,22 +1882,19 @@ function openTaskSheet(id) {
       showToast(prev ? "保存しました" : "追加しました");
     });
     acts.appendChild(saveBtn);
-    const cancel = el("button", null, "閉じる");
-    cancel.addEventListener("click", closeSheet);
-    acts.appendChild(cancel);
-    if (existing) {
-      const del = el("button", "danger slim", "🗑");
-      del.setAttribute("aria-label", "削除");
-      del.addEventListener("click", () => {
-        const before = snapshot();
-        if (existing.shared) { markGrave("tasks", existing.id); scheduleSync(); }
-        tasks.delete(existing.id);
-        commit(before, "削除");
-        closeSheet();
-        showToast("削除しました", "取り消す", undo);
-      });
-      acts.appendChild(del);
-    }
+    /* 「閉じる」は保存されないと誤解しやすいので置かない。
+       追加中なら入力を捨てて閉じる、登録済みならそのタスクを消す（取り消し可） */
+    const del = el("button", "danger", "🗑 削除");
+    del.addEventListener("click", () => {
+      if (!existing) { closeSheet(); showToast("入力を破棄しました"); return; }
+      const before = snapshot();
+      if (existing.shared) { markGrave("tasks", existing.id); scheduleSync(); }
+      tasks.delete(existing.id);
+      commit(before, "削除");
+      closeSheet();
+      showToast("削除しました", "取り消す", undo);
+    });
+    acts.appendChild(del);
     sheet.appendChild(acts);
     if (!existing) setTimeout(() => title.focus(), 60);
   });
