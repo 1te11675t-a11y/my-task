@@ -234,12 +234,14 @@
   .cal .d.hol > span:first-child { color: var(--accent); }
   .daylist-head { font-size: 13px; color: var(--muted); margin: 0 2px 7px; }
   .agenda-empty { padding: 4px 4px 2px; }
+  .callist { display: none; }
   /* PCなど横幅が広いときは、カレンダーの右に今日・明日の予定を並べる */
   @media (min-width: 980px) {
     main.wide { max-width: 1280px; padding-left: 20px; padding-right: 20px; }
     .calwrap { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
     .calside { position: sticky; top: 0; }
     .cal .d { aspect-ratio: 4 / 3; }
+    .callist { display: block; margin-top: 8px; }
   }
 
   /* ── シート（下から出るモーダル） ── */
@@ -1502,6 +1504,16 @@ function renderCal(root) {
     grid.appendChild(b);
   }
   m.appendChild(grid);
+
+  /* PCだけ: カレンダーの下に未完のタスクを全部（一覧タブと同じ並び）。スマホでは長くなるので出さない */
+  const all = el("div", "callist");
+  const open = visibleTasks({ showDone: false });
+  const withDue = sortForBoard(open.filter(t => t.due));
+  const noDue = sortForBoard(open.filter(t => !t.due));
+  if (withDue.length) all.appendChild(section("すべてのタスク（期限あり）", TASK_COLOR, withDue.map(t => taskRow(t)), "期限の早い順"));
+  if (noDue.length) all.appendChild(section("すべてのタスク（期限なし）", "var(--muted)", noDue.map(t => taskRow(t))));
+  if (!open.length) all.appendChild(el("div", "muted", "未完のタスクはありません"));
+  m.appendChild(all);
 
   /* カレンダーの下: 選んだ日（今日・明日以外のとき）→ 今日 → 明日 */
   const tomorrow = dateStr(addDays(new Date(), 1));
