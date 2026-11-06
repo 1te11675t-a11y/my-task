@@ -234,6 +234,13 @@
   .cal .d.hol > span:first-child { color: var(--accent); }
   .daylist-head { font-size: 13px; color: var(--muted); margin: 0 2px 7px; }
   .agenda-empty { padding: 4px 4px 2px; }
+  /* PCなど横幅が広いときは、カレンダーの右に今日・明日の予定を並べる */
+  @media (min-width: 980px) {
+    main.wide { max-width: 1280px; padding-left: 20px; padding-right: 20px; }
+    .calwrap { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
+    .calside { position: sticky; top: 0; }
+    .cal .d { aspect-ratio: 4 / 3; }
+  }
 
   /* ── シート（下から出るモーダル） ── */
   .backdrop {
@@ -1310,6 +1317,7 @@ function section(title, color, items, hint) {
 function render() {
   const m = $("main");
   m.innerHTML = "";
+  m.classList.toggle("wide", view === "cal");
   [...$("tabbar").children].forEach(b => b.classList.toggle("active", b.dataset.v === view));
   $("todayLabel").textContent = todayStr();
   if (view === "today") { $("appTitle").firstChild.textContent = "今週"; renderToday(m); }
@@ -1430,7 +1438,13 @@ function dayAgenda(ds, label, byDay, color) {
   return sec;
 }
 
-function renderCal(m) {
+function renderCal(root) {
+  /* スマホ: カレンダーの下に予定。PC（横幅が広いとき）: カレンダーの右に予定 */
+  const wrap = el("div", "calwrap");
+  const m = el("div", "calmain");
+  const side = el("div", "calside");
+  wrap.appendChild(m); wrap.appendChild(side);
+  root.appendChild(wrap);
   const ref = calRef();
   const y = ref.getFullYear(), mo = ref.getMonth();
   const byDay = calEntriesByDay();
@@ -1492,11 +1506,11 @@ function renderCal(m) {
   /* カレンダーの下: 選んだ日（今日・明日以外のとき）→ 今日 → 明日 */
   const tomorrow = dateStr(addDays(new Date(), 1));
   if (calSelected !== today && calSelected !== tomorrow) {
-    m.appendChild(dayAgenda(calSelected, "", byDay, "var(--muted)"));
+    side.appendChild(dayAgenda(calSelected, "", byDay, "var(--muted)"));
   }
-  m.appendChild(dayAgenda(today, "今日の予定", byDay, "var(--warn)"));
-  m.appendChild(dayAgenda(tomorrow, "明日の予定", byDay, "var(--accent2)"));
-  m.appendChild(el("div", "muted", "期限（タスク）・納期（買い物）・期間（出張）が入っているものだけ出ます。時刻つきのタスクが時刻順で先に並びます。"));
+  side.appendChild(dayAgenda(today, "今日の予定", byDay, "var(--warn)"));
+  side.appendChild(dayAgenda(tomorrow, "明日の予定", byDay, "var(--accent2)"));
+  side.appendChild(el("div", "muted", "期限（タスク）・納期（買い物）・期間（出張）が入っているものだけ出ます。時刻つきのタスクが時刻順で先に並びます。"));
 }
 
 function renderPlanView(m) {
