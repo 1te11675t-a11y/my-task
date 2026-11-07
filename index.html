@@ -310,6 +310,76 @@
   .card h3 { margin: 0 0 8px; font-size: 14px; }
   .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 5px 0; }
   .kv span:last-child { color: var(--muted); }
+
+  /* ===== 据え置き表示（?board）: 使っていないノートPC・モニターを時計＋カレンダーにする ===== */
+  #board { display: none; }
+  body.board > .appbar, body.board > main, body.board > #fab, body.board > .tabbar { display: none !important; }
+  body.board { cursor: none; }
+  body.board.mouse { cursor: default; }
+  body.board #board {
+    display: grid; position: fixed; inset: 0;
+    grid-template-columns: 40fr 60fr; gap: 2.4vw;
+    padding: 3vh 2.6vw; overflow: hidden;
+    font-variant-numeric: tabular-nums;
+    transition: filter 2s;
+  }
+  body.board.dim #board { filter: brightness(.38); }
+  .b-left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .b-time { font-weight: 300; line-height: 1; letter-spacing: -.02em; white-space: nowrap;
+    font-size: min(10.2vw, 24vh); margin-top: 1vh; }
+  .b-time .s { font-size: .26em; color: var(--muted); margin-left: .12em; letter-spacing: 0; }
+  .b-date { font-size: min(2.5vw, 5.2vh); margin-top: 1.6vh; }
+  .b-date .hol { color: var(--danger); font-size: .7em; margin-left: .5em; }
+  .b-date.sun, .b-date.hol-day { color: #ff8a8a; }
+  .b-date.sat { color: #8ab4ff; }
+  .b-wx { display: flex; gap: 1.6vw; margin-top: 3vh; font-size: min(1.5vw, 3.2vh); }
+  .b-wx .w { background: var(--panel); border: 1px solid var(--border); border-radius: 1.2vh; padding: 1.2vh 1.2vw; flex: 1; min-width: 0; }
+  .b-wx .w .k { color: var(--muted); font-size: .75em; }
+  .b-wx .w .ic { font-size: 1.6em; line-height: 1.2; }
+  .b-wx .w .hi { color: #ff9a7a; } .b-wx .w .lo { color: #7ab4ff; }
+  .b-next { margin-top: auto; background: var(--panel); border: 1px solid var(--border);
+    border-left: .6vh solid var(--accent2); border-radius: 1.2vh; padding: 1.6vh 1.4vw; }
+  .b-next.near { border-left-color: var(--warn); }
+  .b-next .k { color: var(--muted); font-size: min(1.2vw, 2.6vh); }
+  .b-next .v { font-size: min(1.9vw, 4.2vh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .b-next .r { font-size: min(1.5vw, 3.2vh); color: var(--accent2); }
+  .b-next.near .r { color: var(--warn); }
+  .b-foot { display: flex; align-items: center; gap: 1vw; margin-top: 1.6vh; color: var(--muted); font-size: min(1vw, 2.2vh); }
+  .b-foot .err { color: var(--danger); }
+  .b-foot button { margin-left: auto; opacity: 0; transition: opacity .4s; font-size: min(1.2vw, 2.6vh); padding: .6vh 1vw; }
+  body.board.mouse .b-foot button { opacity: 1; }
+
+  .b-right { display: grid; grid-template-rows: auto 1fr; gap: 2.4vh; min-width: 0; min-height: 0; }
+  .b-cal-h { font-size: min(1.6vw, 3.4vh); margin-bottom: .8vh; }
+  .b-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .4vh; }
+  .b-cal .dow { text-align: center; color: var(--muted); font-size: min(1vw, 2.1vh); }
+  .b-cal .dow.sun { color: #ff8a8a; } .b-cal .dow.sat { color: #8ab4ff; }
+  .b-cal .d { background: var(--panel); border-radius: .8vh; padding: .4vh .5vw; height: 8.8vh; overflow: hidden; min-width: 0; }
+  .b-cal.r5 .d { height: 10.2vh; } .b-cal.r4 .d { height: 12vh; }
+  .b-cal .d .n { font-size: min(1.1vw, 2.3vh); line-height: 1.2; }
+  .b-cal .d.out { opacity: .32; }
+  .b-cal .d.sun .n, .b-cal .d.hol .n { color: #ff8a8a; } .b-cal .d.sat .n { color: #8ab4ff; }
+  .b-cal .d.today { background: var(--panel2); outline: .3vh solid var(--warn); }
+  .b-cal .d .e { font-size: min(.8vw, 1.65vh); line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: .35vh solid var(--c, var(--accent2)); padding-left: .3vw; margin-top: .2vh; color: var(--text); }
+  .b-cal .d .more { font-size: min(.75vw, 1.5vh); color: var(--muted); }
+
+  .b-days { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6vw; min-height: 0; }
+  .b-day { background: var(--panel); border: 1px solid var(--border); border-radius: 1.2vh; padding: 1.4vh 1.2vw;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .b-day h3 { margin: 0 0 1vh; font-size: min(1.4vw, 3vh); font-weight: 600; color: var(--c); }
+  .b-day h3 span { color: var(--muted); font-weight: 400; font-size: .8em; margin-left: .5em; }
+  .b-list { flex: 1; min-height: 0; overflow: hidden; }
+  .b-item { display: flex; gap: .8vw; align-items: baseline; padding: .45vh 0; border-bottom: 1px solid var(--border);
+    font-size: min(1.2vw, 2.5vh); min-width: 0; }
+  .b-item .t { flex: 0 0 4.6em; color: var(--muted); }
+  .b-item .t.tm { color: var(--text); }
+  .b-item .t.over { color: var(--danger); }
+  .b-item .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .b-item .who { color: var(--muted); font-size: .8em; flex: 0 0 auto; }
+  .b-item.done .nm { text-decoration: line-through; color: var(--muted); }
+  .b-item.past .t, .b-item.past .nm { color: var(--muted); }
+  .b-empty, .b-more { color: var(--muted); font-size: min(1.1vw, 2.4vh); padding: .8vh 0; }
 </style>
 </head>
 <body>
@@ -1318,6 +1388,7 @@ function section(title, color, items, hint) {
    ============================================================ */
 
 function render() {
+  if (BOARD) { renderBoard(); return; }
   const m = $("main");
   m.innerHTML = "";
   m.classList.toggle("wide", view === "cal");
@@ -2258,6 +2329,422 @@ function openDataSheet() {
 }
 
 /* ============================================================
+   9.5 据え置き表示（URL に ?board を付けて開く）
+   ------------------------------------------------------------
+   使っていないノートPC・モニターに出しっぱなしにする時計＋カレンダー。
+   データは同じ端末の localStorage と、共有（GAS）の同期をそのまま使う。
+   表示専用なので、ここからタスクは編集しない。
+   ============================================================ */
+
+const BOARD = new URLSearchParams(location.search).has("board");
+const LS_BOARD = "private_task_board";
+let boardCfg = { place: "", lat: null, lon: null, dimFrom: "22:00", dimTo: "06:00" };
+let boardWx = { at: 0, data: null, err: "" };
+let boardWake = null;
+let boardMin = "";
+let boardBootDay = "";
+let boardMouseTimer = null;
+
+function loadBoardCfg() {
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_BOARD) || "{}");
+    if (o && typeof o === "object") boardCfg = Object.assign(boardCfg, o);
+  } catch (e) { /* 既定値 */ }
+}
+function saveBoardCfg() {
+  try { localStorage.setItem(LS_BOARD, JSON.stringify(boardCfg)); } catch (e) { /* 続行 */ }
+}
+function hm2min(s) { const t = toTime(s); return t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3)) : null; }
+function boardDimNow(n) {
+  const f = hm2min(boardCfg.dimFrom), t = hm2min(boardCfg.dimTo);
+  if (f == null || t == null || f === t) return false;
+  const m = n.getHours() * 60 + n.getMinutes();
+  return f < t ? (m >= f && m < t) : (m >= f || m < t);
+}
+
+/* 天気（Open-Meteo: 登録・APIキー不要）。30分ごと */
+const WX = [
+  [0, "☀", "晴れ"], [1, "🌤", "晴れ"], [2, "⛅", "晴れ時々くもり"], [3, "☁", "くもり"],
+  [45, "🌫", "霧"], [48, "🌫", "霧"],
+  [51, "🌦", "霧雨"], [53, "🌦", "霧雨"], [55, "🌧", "霧雨"], [56, "🌧", "着氷性の霧雨"], [57, "🌧", "着氷性の霧雨"],
+  [61, "🌧", "小雨"], [63, "🌧", "雨"], [65, "🌧", "大雨"], [66, "🌧", "着氷性の雨"], [67, "🌧", "着氷性の雨"],
+  [71, "🌨", "小雪"], [73, "🌨", "雪"], [75, "❄", "大雪"], [77, "🌨", "雪"],
+  [80, "🌦", "にわか雨"], [81, "🌧", "にわか雨"], [82, "⛈", "激しいにわか雨"],
+  [85, "🌨", "にわか雪"], [86, "❄", "強いにわか雪"],
+  [95, "⛈", "雷雨"], [96, "⛈", "雷雨（ひょう）"], [99, "⛈", "雷雨（ひょう）"],
+];
+function wxOf(code) { const w = WX.find(x => x[0] === Number(code)); return w ? { ic: w[1], tx: w[2] } : { ic: "・", tx: "—" }; }
+async function boardFetchWx(force) {
+  if (boardCfg.lat == null || boardCfg.lon == null) return;
+  if (!force && Date.now() - boardWx.at < 30 * 60000) return;
+  boardWx.at = Date.now();
+  try {
+    const u = "https://api.open-meteo.com/v1/forecast?latitude=" + Number(boardCfg.lat).toFixed(3)
+      + "&longitude=" + Number(boardCfg.lon).toFixed(3)
+      + "&current=temperature_2m,weather_code"
+      + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+      + "&timezone=auto&forecast_days=2";
+    const res = await fetch(u);
+    const d = await res.json();
+    if (!d || !d.daily) throw new Error("取得できませんでした");
+    boardWx.data = d; boardWx.err = "";
+  } catch (e) {
+    boardWx.err = String(e.message || e).slice(0, 30);
+  }
+  render();
+}
+
+async function boardKeepAwake() {
+  try {
+    if ("wakeLock" in navigator && !document.hidden && !boardWake) {
+      boardWake = await navigator.wakeLock.request("screen");
+      boardWake.addEventListener("release", () => { boardWake = null; });
+    }
+  } catch (e) { boardWake = null; }
+}
+
+function boardItem(time, timeCls, name, who, cls) {
+  const r = el("div", "b-item" + (cls ? " " + cls : ""));
+  r.appendChild(el("span", "t" + (timeCls ? " " + timeCls : ""), time));
+  r.appendChild(el("span", "nm", name));
+  if (who) r.appendChild(el("span", "who", who));
+  return r;
+}
+
+/* 1日分。時刻つき → 予定（買い物・出張）→ 時刻なし。今日は期限切れを先頭に */
+function boardDayItems(ds, byDay, isToday) {
+  const items = (byDay.get(ds) || []).slice();
+  const rank = it => it.kind === "task" ? (it.t.dueTime ? 0 : 2) : 1;
+  items.sort((a, b) => {
+    const r = rank(a) - rank(b);
+    if (r) return r;
+    if (a.kind === "task" && b.kind === "task") {
+      const da = a.t.status === "done" ? 1 : 0, db = b.t.status === "done" ? 1 : 0;
+      if (da !== db) return da - db;
+      return timeCmp(a.t.dueTime, b.t.dueTime) || (a.t.order - b.t.order);
+    }
+    return 0;
+  });
+  const now = timeStr(new Date());
+  const out = [];
+  if (isToday) {
+    sortForBoard(visibleTasks({ showDone: false }).filter(t => t.due && t.due < ds))
+      .forEach(t => out.push(boardItem("期限切れ", "over", t.title || "(無題)", whoOf(t))));
+  }
+  items.forEach(it => {
+    if (it.kind === "task") {
+      const t = it.t;
+      const past = isToday && t.dueTime && t.dueTime < now && t.status !== "done";
+      out.push(boardItem(t.dueTime || "—", t.dueTime ? "tm" : "", t.title || "(無題)", whoOf(t),
+        t.status === "done" ? "done" : past ? "past" : ""));
+    } else {
+      const p = it.p, meta = PLAN_KINDS[p.kind];
+      out.push(boardItem(meta.icon + (p.kind === "trip" ? " 出張" : " 買物"), "", p.title || "(無題)", whoOf(p)));
+    }
+  });
+  return out;
+}
+
+/* 次の時刻つき予定（今日のこのあと → なければ明日） */
+function boardNext() {
+  const n = new Date();
+  const now = timeStr(n), today = todayStr(), tomorrow = dateStr(addDays(n, 1));
+  const open = visibleTasks({ showDone: false }).filter(t => t.dueTime && t.status !== "done");
+  const pick = (ds, after) => open.filter(t => t.due === ds && (!after || t.dueTime > after))
+    .sort((a, b) => timeCmp(a.dueTime, b.dueTime))[0];
+  const t = pick(today, now);
+  if (t) {
+    const mins = hm2min(t.dueTime) - (n.getHours() * 60 + n.getMinutes());
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return { t: t, when: t.dueTime, rest: "あと " + (h ? h + "時間" : "") + m + "分", near: mins <= 30 };
+  }
+  const t2 = pick(tomorrow, "");
+  if (t2) return { t: t2, when: "明日 " + t2.dueTime, rest: "", near: false };
+  return null;
+}
+
+function boardCalendar(byDay, today) {
+  const n = new Date();
+  const y = n.getFullYear(), mo = n.getMonth();
+  const box = el("div");
+  box.appendChild(el("div", "b-cal-h", `${y}年${mo + 1}月`));
+  const first = new Date(y, mo, 1);
+  const offset = first.getDay();
+  const rows = Math.ceil((offset + new Date(y, mo + 1, 0).getDate()) / 7);
+  const grid = el("div", "b-cal r" + rows);
+  ["日", "月", "火", "水", "木", "金", "土"].forEach((d, i) =>
+    grid.appendChild(el("div", "dow" + (i === 0 ? " sun" : i === 6 ? " sat" : ""), d)));
+  const start = addDays(first, -offset);
+  for (let i = 0; i < rows * 7; i++) {
+    const d = addDays(start, i), ds = dateStr(d), dow = d.getDay();
+    const c = el("div", "d" + (d.getMonth() === mo ? "" : " out") + (ds === today ? " today" : "")
+      + (dow === 0 ? " sun" : dow === 6 ? " sat" : "") + (getHols(d.getFullYear()).has(ds) ? " hol" : ""));
+    c.appendChild(el("div", "n", String(d.getDate())));
+    const list = (byDay.get(ds) || []).filter(it => it.kind !== "task" || it.t.status !== "done");
+    list.sort((a, b) => (a.kind === "task" && a.t.dueTime ? 0 : 1) - (b.kind === "task" && b.t.dueTime ? 0 : 1)
+      || (a.kind === "task" && b.kind === "task" ? timeCmp(a.t.dueTime, b.t.dueTime) : 0));
+    list.forEach(it => {
+      const e = it.kind === "task"
+        ? el("div", "e", (it.t.dueTime ? it.t.dueTime + " " : "") + (it.t.title || "(無題)"))
+        : el("div", "e", PLAN_KINDS[it.p.kind].icon + " " + (it.p.title || "(無題)"));
+      e.style.setProperty("--c", it.kind === "task" ? taskColor(it.t) : PLAN_KINDS[it.p.kind].color);
+      c.appendChild(e);
+    });
+    grid.appendChild(c);
+  }
+  box.appendChild(grid);
+  return box;
+}
+
+/* カレンダーのマスに入りきらない予定は「ほか n 件」にまとめる */
+function boardFitCell(c) {
+  if (c.scrollHeight <= c.clientHeight + 1) return;
+  const es = [...c.querySelectorAll(".e")];
+  let hidden = 0;
+  const more = el("div", "more");
+  c.appendChild(more);
+  while (es.length && c.scrollHeight > c.clientHeight + 1) {
+    es.pop().remove(); hidden++;
+    more.textContent = `ほか${hidden}件`;
+  }
+}
+
+/* はみ出した行は「ほか n 件」にまとめる */
+function boardFit(list) {
+  if (list.scrollHeight <= list.clientHeight + 1) return;
+  const rows = [...list.querySelectorAll(".b-item")];
+  let hidden = 0;
+  const more = el("div", "b-more");
+  list.appendChild(more);
+  while (rows.length > 1 && list.scrollHeight > list.clientHeight + 1) {
+    rows.pop().remove(); hidden++;
+    more.textContent = `ほか ${hidden} 件`;
+  }
+}
+
+function renderBoard() {
+  const b = $("board");
+  b.innerHTML = "";
+  const n = new Date();
+  boardMin = timeStr(n);
+  document.body.classList.toggle("dim", boardDimNow(n));
+  /* 焼き付き防止に、1分ごとに数ピクセルずらす */
+  const k = n.getMinutes();
+  b.style.transform = `translate(${(k % 5) - 2}px, ${(Math.floor(k / 5) % 5) - 2}px)`;
+
+  const today = todayStr(), tomorrow = dateStr(addDays(n, 1));
+  const byDay = calEntriesByDay();
+  const wdN = ["日", "月", "火", "水", "木", "金", "土"];
+
+  /* 左: 時計・日付・天気・次の予定 */
+  const left = el("div", "b-left");
+  const tm = el("div", "b-time");
+  tm.appendChild(el("span", null, boardMin));
+  const sec = el("span", "s", pad2(n.getSeconds()));
+  sec.id = "bSec";
+  tm.appendChild(sec);
+  left.appendChild(tm);
+  const isHol = getHols(n.getFullYear()).has(today);
+  const dt = el("div", "b-date" + (n.getDay() === 0 ? " sun" : n.getDay() === 6 ? " sat" : "") + (isHol ? " hol-day" : ""),
+    `${n.getFullYear()}年${n.getMonth() + 1}月${n.getDate()}日（${wdN[n.getDay()]}）`);
+  if (isHol) dt.appendChild(el("span", "hol", "祝日"));
+  left.appendChild(dt);
+
+  if (boardWx.data) {
+    const d = boardWx.data.daily, cur = boardWx.data.current || {};
+    const wx = el("div", "b-wx");
+    [0, 1].forEach(i => {
+      if (!d.time || !d.time[i]) return;
+      const w = wxOf(d.weather_code[i]);
+      const box = el("div", "w");
+      box.appendChild(el("div", "k", (i === 0 ? "今日" : "明日") + (boardCfg.place ? "　" + boardCfg.place : "")
+        + (i === 0 && cur.temperature_2m != null ? `　いま ${Math.round(cur.temperature_2m)}°` : "")));
+      const ic = el("div", "ic", w.ic + " ");
+      const tx = el("span", null, w.tx);
+      tx.style.fontSize = ".55em";
+      ic.appendChild(tx);
+      box.appendChild(ic);
+      const line = el("div");
+      line.appendChild(el("span", "hi", Math.round(d.temperature_2m_max[i]) + "°"));
+      line.appendChild(document.createTextNode(" / "));
+      line.appendChild(el("span", "lo", Math.round(d.temperature_2m_min[i]) + "°"));
+      const pp = d.precipitation_probability_max && d.precipitation_probability_max[i];
+      if (pp != null) line.appendChild(document.createTextNode(`　☂ ${pp}%`));
+      box.appendChild(line);
+      wx.appendChild(box);
+    });
+    left.appendChild(wx);
+  }
+
+  const nx = boardNext();
+  const next = el("div", "b-next" + (nx && nx.near ? " near" : ""));
+  next.appendChild(el("div", "k", "次の予定"));
+  if (nx) {
+    next.appendChild(el("div", "v", `${nx.when}　${nx.t.title || "(無題)"}`));
+    if (nx.rest) next.appendChild(el("div", "r", nx.rest));
+  } else {
+    next.appendChild(el("div", "v", "時刻つきの予定はありません"));
+  }
+  left.appendChild(next);
+
+  const foot = el("div", "b-foot");
+  if (!shareOn()) foot.appendChild(el("span", "err", "共有が未設定です（マウスを動かして ⚙ 設定 → 共有の設定）"));
+  else if (share.lastError) foot.appendChild(el("span", "err", "同期失敗: " + share.lastError));
+  else foot.appendChild(el("span", null, share.lastSync ? "最終同期 " + timeStr(new Date(share.lastSync)) : "同期待ち…"));
+  if (boardWx.err) foot.appendChild(el("span", "err", "天気: " + boardWx.err));
+  const gear = el("button", null, "⚙ 設定");
+  gear.addEventListener("click", openBoardSheet);
+  foot.appendChild(gear);
+  left.appendChild(foot);
+
+  /* 右: 月カレンダー ＋ 今日・明日 */
+  const right = el("div", "b-right");
+  right.appendChild(boardCalendar(byDay, today));
+  const days = el("div", "b-days");
+  const lists = [];
+  [[today, "今日", "var(--warn)", true], [tomorrow, "明日", "var(--accent2)", false]].forEach(([ds, lb, c, isT]) => {
+    const box = el("div", "b-day");
+    box.style.setProperty("--c", c);
+    const sd = parseDay(ds);
+    const h = el("h3", null, lb);
+    h.appendChild(el("span", null, `${sd.getMonth() + 1}/${sd.getDate()}（${wdN[sd.getDay()]}）`));
+    box.appendChild(h);
+    const list = el("div", "b-list");
+    const rows = boardDayItems(ds, byDay, isT);
+    rows.forEach(r => list.appendChild(r));
+    if (!rows.length) list.appendChild(el("div", "b-empty", "予定はありません"));
+    box.appendChild(list);
+    days.appendChild(box);
+    lists.push(list);
+  });
+  right.appendChild(days);
+
+  b.appendChild(left);
+  b.appendChild(right);
+  b.querySelectorAll(".b-cal .d").forEach(boardFitCell);
+  lists.forEach(boardFit);
+}
+
+function boardTick() {
+  const n = new Date();
+  /* 起動した翌日以降の 3 時に読み込み直す（アプリの更新を拾う・長時間の開きっぱなし対策） */
+  if (todayStr() !== boardBootDay && n.getHours() >= 3 && navigator.onLine && !sheetOpen) { location.reload(); return; }
+  if (timeStr(n) !== boardMin) { if (!sheetOpen) render(); boardFetchWx(false); return; }
+  const s = $("bSec");
+  if (s) s.textContent = pad2(n.getSeconds());
+}
+
+function openBoardSheet() {
+  openSheet(sheet => {
+    sheet.appendChild(el("h2", null, "据え置き表示の設定"));
+    sheet.appendChild(el("div", "muted", "この設定はこのPCのブラウザだけに保存されます。"));
+
+    sheet.appendChild(el("label", null, "天気の地域（市区町村名で検索）"));
+    const row = el("div", "idea-add");
+    const q = el("input");
+    q.value = boardCfg.place; q.placeholder = "例: 名古屋";
+    const find = el("button", null, "検索");
+    row.appendChild(q); row.appendChild(find);
+    sheet.appendChild(row);
+    const res = el("div");
+    sheet.appendChild(res);
+    const search = async () => {
+      const name = q.value.trim();
+      res.innerHTML = "";
+      if (!name) return;
+      res.appendChild(el("div", "muted", "検索しています…"));
+      try {
+        const r = await fetch("https://geocoding-api.open-meteo.com/v1/search?count=6&language=ja&format=json&name="
+          + encodeURIComponent(name));
+        const d = await r.json();
+        res.innerHTML = "";
+        (d.results || []).forEach(g => {
+          const b = el("button", "w100", [g.name, g.admin1, g.country].filter(Boolean).join(" / "));
+          b.style.marginTop = "6px";
+          b.addEventListener("click", () => {
+            boardCfg.place = g.name; boardCfg.lat = g.latitude; boardCfg.lon = g.longitude;
+            saveBoardCfg(); closeSheet(); boardFetchWx(true); showToast("天気の地域を「" + g.name + "」にしました");
+          });
+          res.appendChild(b);
+        });
+        if (!(d.results || []).length) res.appendChild(el("div", "muted", "見つかりませんでした"));
+      } catch (e) { res.innerHTML = ""; res.appendChild(el("div", "muted", "検索できませんでした（ネット接続を確認）")); }
+    };
+    find.addEventListener("click", search);
+    q.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+    if (boardCfg.lat != null) {
+      const off = el("button", "w100", "天気を表示しない");
+      off.style.marginTop = "8px";
+      off.addEventListener("click", () => {
+        boardCfg.place = ""; boardCfg.lat = null; boardCfg.lon = null; boardWx.data = null; boardWx.err = "";
+        saveBoardCfg(); closeSheet(); render();
+      });
+      sheet.appendChild(off);
+    }
+
+    sheet.appendChild(el("label", null, "夜は暗くする（開始・終了。同じ時刻なら暗くしない）"));
+    const g = el("div", "grid2");
+    const f = el("input"); f.type = "time"; f.value = boardCfg.dimFrom;
+    const t = el("input"); t.type = "time"; t.value = boardCfg.dimTo;
+    g.appendChild(f); g.appendChild(t);
+    sheet.appendChild(g);
+    [f, t].forEach(x => x.addEventListener("change", () => {
+      boardCfg.dimFrom = toTime(f.value) || "00:00"; boardCfg.dimTo = toTime(t.value) || "00:00";
+      saveBoardCfg(); render();
+    }));
+
+    const acts = el("div", "grid2");
+    acts.style.marginTop = "16px";
+    const sh = el("button", null, "共有の設定");
+    sh.addEventListener("click", () => { closeSheet(); openShareSheet(); });
+    const sy = el("button", null, "今すぐ同期");
+    sy.addEventListener("click", () => { closeSheet(); syncShared(true); });
+    const fs = el("button", null, "全画面");
+    fs.addEventListener("click", () => { closeSheet(); try { document.documentElement.requestFullscreen(); } catch (e) { /* 続行 */ } });
+    const nv = el("button", null, "通常の画面へ");
+    nv.addEventListener("click", () => { location.href = location.pathname; });
+    [sh, sy, fs, nv].forEach(x => acts.appendChild(x));
+    sheet.appendChild(acts);
+    const close = el("button", "w100 primary", "閉じる");
+    close.style.marginTop = "10px";
+    close.addEventListener("click", () => { closeSheet(); render(); });
+    sheet.appendChild(close);
+  });
+}
+
+function initBoard() {
+  document.body.classList.add("board");
+  document.title = "時計とカレンダー";
+  const b = el("div");
+  b.id = "board";
+  document.body.insertBefore(b, $("sheetRoot"));
+  loadBoardCfg();
+  boardBootDay = todayStr();
+  /* マウスを動かしたときだけ、カーソルと ⚙ を出す */
+  document.addEventListener("mousemove", () => {
+    document.body.classList.add("mouse");
+    clearTimeout(boardMouseTimer);
+    boardMouseTimer = setTimeout(() => document.body.classList.remove("mouse"), 5000);
+  });
+  window.addEventListener("keydown", e => { if (e.key === "Escape" && sheetOpen) closeSheet(); });
+  window.addEventListener("resize", () => { if (!sheetOpen) render(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (!sheetOpen) render();
+    syncShared(false);
+    boardKeepAwake();
+  });
+  setInterval(boardTick, 1000);
+  render();
+  boardKeepAwake();
+  boardFetchWx(true);
+  if (shareOn()) { syncShared(false); startSyncTimer(); }
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
+  }
+}
+
+/* ============================================================
    10. 初期化
    ============================================================ */
 
@@ -2305,6 +2792,7 @@ function init() {
   loadData();
   loadShare();
   loadCands();
+  if (BOARD) { initBoard(); return; }
   applySimpleMode();
   $("todayLabel").textContent = todayStr();
 
