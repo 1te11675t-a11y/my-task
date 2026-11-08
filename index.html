@@ -328,8 +328,10 @@
   .b-time { font-weight: 300; line-height: 1; letter-spacing: -.02em; white-space: nowrap;
     font-size: min(10.2vw, 24vh); margin-top: 1vh; }
   .b-time .s { font-size: .26em; color: var(--muted); margin-left: .12em; letter-spacing: 0; }
-  .b-date { font-size: min(2.5vw, 5.2vh); margin-top: 1.6vh; }
-  .b-date .hol { color: var(--danger); font-size: .7em; margin-left: .5em; }
+  .b-date { font-size: min(3.4vw, 7.2vh); margin-top: 1.4vh; line-height: 1.25; }
+  .b-date .y { font-size: .55em; margin-right: .15em; }
+  .b-date .md { white-space: nowrap; }
+  .b-date .hol { color: var(--danger); font-size: .55em; margin-left: .5em; display: inline-block; }
   .b-date.sun, .b-date.hol-day { color: #ff8a8a; }
   .b-date.sat { color: #8ab4ff; }
   .b-wx { display: flex; gap: 1.6vw; margin-top: 3vh; font-size: min(1.5vw, 3.2vh); }
@@ -2561,8 +2563,9 @@ function renderBoard() {
   tm.appendChild(sec);
   left.appendChild(tm);
   const isHol = getHols(n.getFullYear()).has(today);
-  const dt = el("div", "b-date" + (n.getDay() === 0 ? " sun" : n.getDay() === 6 ? " sat" : "") + (isHol ? " hol-day" : ""),
-    `${n.getFullYear()}年${n.getMonth() + 1}月${n.getDate()}日（${wdN[n.getDay()]}）`);
+  const dt = el("div", "b-date" + (n.getDay() === 0 ? " sun" : n.getDay() === 6 ? " sat" : "") + (isHol ? " hol-day" : ""));
+  dt.appendChild(el("span", "y", `${n.getFullYear()}年`));
+  dt.appendChild(el("span", "md", `${n.getMonth() + 1}月${n.getDate()}日（${wdN[n.getDay()]}）`));
   if (isHol) dt.appendChild(el("span", "hol", "祝日"));
   left.appendChild(dt);
 
