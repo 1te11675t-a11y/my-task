@@ -474,6 +474,7 @@ let cands = { list: [], queue: [], lastFetch: "", lastError: "" };   /* メー�
 let candFetching = false;
 let candFlushTimer = null;
 let syncing = false;
+let resyncNeeded = false;   /* 同期中に手元が変わったら、終わってからもう一度送る */
 let syncTimer = null;
 let syncPending = null;
 let prefs = { showDone: false, listFilter: "open", simple: false, shareNew: false };
@@ -901,9 +902,12 @@ function syncStatusText() {
 
 async function syncShared(manual) {
   if (!shareOn()) { if (manual) showToast("先に「共有の設定」をしてください"); return; }
-  if (syncing) return;
+  if (syncing) { resyncNeeded = true; return; }
   syncing = true;
+  resyncNeeded = false;
   if (manual) showToast("同期しています…");
+  /* 送る直前の時刻。これより後に作った・直したものは、サーバーの返事で上書きしない */
+  const sentAt = nowIso();
   try {
     const payload = {
       token: share.token,
@@ -915,8 +919,16 @@ async function syncShared(manual) {
     const res = await fetch(share.url, { method: "POST", body: JSON.stringify(payload), redirect: "follow" });
     const data = await res.json();
     if (!data || !data.ok) throw new Error((data && data.error) || "サーバーが受け付けませんでした");
+    /* 通信している間に追加・編集した予定を取っておく（返事で丸ごと置き換えると消えてしまうため） */
+    const localNewer = [...plans.values()].filter(p => String(p.updatedAt) >= sentAt);
+    const goneSince = new Set((graves.plans || []).filter(g => String(g.deletedAt) >= sentAt).map(g => g.id));
     setPlansFromArray(data.plans || []);
-    mergeSharedTasks(data.tasks || []);
+    localNewer.forEach(p => {
+      const cur = plans.get(p.id);
+      if (!cur || String(cur.updatedAt) < String(p.updatedAt)) plans.set(p.id, p);
+    });
+    goneSince.forEach(id => plans.delete(id));
+    mergeSharedTasks(data.tasks || [], sentAt);
     const limit = Date.now() - 60 * 86400000;
     ["plans", "tasks"].forEach(k => {
       graves[k] = (graves[k] || []).filter(g => new Date(g.deletedAt).getTime() > limit);
@@ -938,11 +950,13 @@ async function syncShared(manual) {
     render();
   } finally {
     syncing = false;
+    if (resyncNeeded) { resyncNeeded = false; scheduleSync(); }
   }
 }
 
-/* 相手から届いた共有タスクを取り込む。共有していないタスクには触れない */
-function mergeSharedTasks(remote) {
+/* 相手から届いた共有タスクを取り込む。共有していないタスクには触れない。
+   sentAt 以降に手元で作った・直したものは消さない（まだサーバーに届いていないだけなので） */
+function mergeSharedTasks(remote, sentAt) {
   const seen = new Set();
   remote.forEach(o => {
     const t = normalizeTask(Object.assign({}, o, { shared: true }));
@@ -953,7 +967,9 @@ function mergeSharedTasks(remote) {
     if (!cur || String(t.updatedAt) >= String(cur.updatedAt)) tasks.set(t.id, t);
   });
   /* 相手が消した共有タスクは、こちらからも消す（共有していないものは残す） */
-  [...tasks.values()].forEach(t => { if (t.shared && !seen.has(t.id)) tasks.delete(t.id); });
+  [...tasks.values()].forEach(t => {
+    if (t.shared && !seen.has(t.id) && !(sentAt && String(t.updatedAt) >= sentAt)) tasks.delete(t.id);
+  });
 }
 
 /* 予定やタスクをいじったら、少し待ってからまとめて送る */
