@@ -339,6 +339,16 @@
   .b-wx .w .k { color: var(--muted); font-size: .75em; }
   .b-wx .w .ic { font-size: 1.6em; line-height: 1.2; }
   .b-wx .w .hi { color: #ff9a7a; } .b-wx .w .lo { color: #7ab4ff; }
+  /* 室内（SwitchBot）: PC の board_server.py から取得。取れない端末では出さない */
+  .b-home { margin-top: 2vh; background: var(--panel); border: 1px solid var(--border); border-radius: 1.2vh;
+    padding: 1.2vh 1.2vw; font-size: min(1.5vw, 3.2vh); }
+  .b-home .k { color: var(--muted); font-size: .75em; }
+  .b-home .m { display: flex; align-items: baseline; gap: 1.2vw; white-space: nowrap; }
+  .b-home .m .nm { color: var(--muted); font-size: .7em; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .b-home .m .tp { font-size: 1.5em; }
+  .b-home .m .hm { font-size: 1.2em; }
+  .b-home .m .note { font-size: .7em; color: var(--warn); }
+  .b-home .bat { margin-top: .6vh; font-size: .8em; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .b-next { margin-top: auto; background: var(--panel); border: 1px solid var(--border);
     border-left: .6vh solid var(--accent2); border-radius: 1.2vh; padding: 1.6vh 1.4vw; }
   .b-next.near { border-left-color: var(--warn); }
@@ -2412,6 +2422,44 @@ async function boardFetchWx(force) {
   render();
 }
 
+/* 室内の温湿度・電池（SwitchBot）。PC で board_server.py が動いているときだけ取れる */
+const BOARD_HOME_URL = "http://127.0.0.1:8771/status";
+let boardHome = { at: 0, data: null };
+async function boardFetchHome(force) {
+  if (!force && Date.now() - boardHome.at < 2 * 60000) return;
+  boardHome.at = Date.now();
+  let d = null;
+  try {
+    const res = await fetch(BOARD_HOME_URL, { cache: "no-store" });
+    d = await res.json();
+  } catch (e) { d = null; }
+  const had = JSON.stringify(boardHome.data);
+  boardHome.data = d && d.ok ? d : (d && boardHome.data ? boardHome.data : null);
+  /* 前回成功から30分以上たったら古いので消す */
+  if (boardHome.data && boardHome.data.at && Date.now() - new Date(boardHome.data.at).getTime() > 30 * 60000) boardHome.data = null;
+  if (JSON.stringify(boardHome.data) !== had && !sheetOpen) render();
+}
+
+function boardHomeBox() {
+  const d = boardHome.data;
+  if (!d || (!d.meters.length && !d.low_battery.length)) return null;
+  const box = el("div", "b-home");
+  box.appendChild(el("div", "k", "🏠 室内"));
+  d.meters.forEach(m => {
+    const row = el("div", "m");
+    row.appendChild(el("span", "tp", Number(m.temp).toFixed(1) + "°"));
+    row.appendChild(el("span", "hm", "💧" + Math.round(m.hum) + "%"));
+    const note = m.hum < 40 ? "乾燥" : m.hum > 60 ? "カビ注意" : m.temp >= 28 ? "暑い" : m.temp <= 16 ? "寒い" : "";
+    if (note) row.appendChild(el("span", "note", note));
+    if (d.meters.length > 1) row.appendChild(el("span", "nm", m.name));
+    box.appendChild(row);
+  });
+  if (d.low_battery.length) {
+    box.appendChild(el("div", "bat", "🔋 電池少: " + d.low_battery.map(x => `${x.name} ${x.battery}%`).join("、")));
+  }
+  return box;
+}
+
 async function boardKeepAwake() {
   try {
     if ("wakeLock" in navigator && !document.hidden && !boardWake) {
@@ -2594,6 +2642,8 @@ function renderBoard() {
     });
     left.appendChild(wx);
   }
+  const home = boardHomeBox();
+  if (home) left.appendChild(home);
 
   const nx = boardNext();
   const next = el("div", "b-next" + (nx && nx.near ? " near" : ""));
@@ -2648,7 +2698,7 @@ function boardTick() {
   const n = new Date();
   /* 起動した翌日以降の 3 時に読み込み直す（アプリの更新を拾う・長時間の開きっぱなし対策） */
   if (todayStr() !== boardBootDay && n.getHours() >= 3 && navigator.onLine && !sheetOpen) { location.reload(); return; }
-  if (timeStr(n) !== boardMin) { if (!sheetOpen) render(); boardFetchWx(false); return; }
+  if (timeStr(n) !== boardMin) { if (!sheetOpen) render(); boardFetchWx(false); boardFetchHome(false); return; }
   const s = $("bSec");
   if (s) s.textContent = pad2(n.getSeconds());
 }
@@ -2757,6 +2807,7 @@ function initBoard() {
   render();
   boardKeepAwake();
   boardFetchWx(true);
+  boardFetchHome(true);
   if (shareOn()) { syncShared(false); startSyncTimer(); }
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
