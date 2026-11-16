@@ -941,6 +941,7 @@ async function syncShared(manual) {
     });
     goneSince.forEach(id => plans.delete(id));
     mergeSharedTasks(data.tasks || [], sentAt);
+    if (BOARD) boardTakeHome(data.home);
     const limit = Date.now() - 60 * 86400000;
     ["plans", "tasks"].forEach(k => {
       graves[k] = (graves[k] || []).filter(g => new Date(g.deletedAt).getTime() > limit);
@@ -2422,9 +2423,20 @@ async function boardFetchWx(force) {
   render();
 }
 
-/* 室内の温湿度・電池（SwitchBot）。PC で board_server.py が動いているときだけ取れる */
+/* 室内の温湿度・電池（SwitchBot）。取り先は2つ:
+   - 共有の同期の返事（GAS が10分ごとに SwitchBot から取ったもの）→ どの端末でも出る
+   - PC の board_server.py（127.0.0.1:8771）→ 動いている PC だけ。こちらは5分ごとで新しい
+   取った時刻（at）が新しいほうを使う。40分以上古いものは出さない */
 const BOARD_HOME_URL = "http://127.0.0.1:8771/status";
 let boardHome = { at: 0, data: null };
+function boardHomeTime(d) { return d && d.at ? new Date(d.at).getTime() : 0; }
+function boardTakeHome(d) {
+  const had = JSON.stringify(boardHome.data);
+  if (d && d.ok && Array.isArray(d.meters) && Array.isArray(d.low_battery)
+      && boardHomeTime(d) >= boardHomeTime(boardHome.data)) boardHome.data = d;
+  if (boardHome.data && Date.now() - boardHomeTime(boardHome.data) > 40 * 60000) boardHome.data = null;
+  if (JSON.stringify(boardHome.data) !== had && !sheetOpen) render();
+}
 async function boardFetchHome(force) {
   if (!force && Date.now() - boardHome.at < 2 * 60000) return;
   boardHome.at = Date.now();
@@ -2433,11 +2445,7 @@ async function boardFetchHome(force) {
     const res = await fetch(BOARD_HOME_URL, { cache: "no-store" });
     d = await res.json();
   } catch (e) { d = null; }
-  const had = JSON.stringify(boardHome.data);
-  boardHome.data = d && d.ok ? d : (d && boardHome.data ? boardHome.data : null);
-  /* 前回成功から30分以上たったら古いので消す */
-  if (boardHome.data && boardHome.data.at && Date.now() - new Date(boardHome.data.at).getTime() > 30 * 60000) boardHome.data = null;
-  if (JSON.stringify(boardHome.data) !== had && !sheetOpen) render();
+  boardTakeHome(d);
 }
 
 function boardHomeBox() {
